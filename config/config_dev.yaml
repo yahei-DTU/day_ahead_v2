@@ -1,0 +1,3 @@
+training_length: 364  # Number of days for training
+validation_length: 63  # Number of days for validation
+testing_length: 1     # Number of days for testing

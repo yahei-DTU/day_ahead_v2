@@ -1,0 +1,10 @@
+name: day_ahead_v2
+channels:
+  - defaults
+dependencies:
+  - pandas
+  - numpy
+  - pip:
+      - black
+      - pytest
+prefix: C:\Users\yahei\AppData\Local\miniconda3\envs\day_ahead_v2
