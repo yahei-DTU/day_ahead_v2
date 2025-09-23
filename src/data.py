@@ -24,26 +24,32 @@ class DataImporter:
     A class to import data from various file formats into a pandas DataFrame.
     Supports CSV, Excel, JSON, and Parquet files.
     If the file format is not recognized, it reads the file as plain text.
+    Can also be created as an empty instance without any file.
 
     Attributes:
-        filename (str): The name of the file to import.
+        filename (Optional[str]): The name of the file to import. If None,
+            creates an empty instance.
         arguments (Dict[str, Any]): Additional arguments to pass to the
             pandas read function.
     """
-    filename: str
+    filename: Optional[str] = None
     arguments: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
-        self._data = self._load_data()
+        if self.filename is not None:
+            self._data = self._load_data()
+        else:
+            self._data = None
 
     @property
-    def data(self) -> Union[pd.DataFrame, str]:
+    def data(self) -> Union[pd.DataFrame, str, None]:
         """
         Access the loaded data.
         
         Returns:
-            Union[pd.DataFrame, str]: The loaded data as a pandas DataFrame
-            for supported formats, or as a string for unsupported formats.
+            Union[pd.DataFrame, str, None]: The loaded data as a pandas
+            DataFrame for supported formats, as a string for unsupported
+            formats, or None if no file was loaded.
         """
         return self._data
 
@@ -53,11 +59,15 @@ class DataImporter:
 
         Raises:
             FileNotFoundError: If the file is not found.
+            ValueError: If no filename was provided.
 
         Returns:
             Union[pd.DataFrame, str]: The loaded data as a DataFrame or
             plain text.
         """
+        if self.filename is None:
+            raise ValueError("No filename provided. Cannot load data.")
+            
         data_path = os.path.join(
             os.path.dirname(__file__), '../data', self.filename
         )
@@ -81,8 +91,33 @@ class DataImporter:
             return pd.read_parquet(data_path, **self.arguments)
         else:
             # For other file types, fall back to reading as text
-            with open(data_path, 'r') as f:
+            with open(data_path, 'r', encoding='utf-8') as f:
                 return f.read()
+    
+    def load_file(self, filename: str, **kwargs) -> None:
+        """
+        Load data from a file after instance creation.
+        
+        Args:
+            filename (str): The name of the file to load.
+            **kwargs: Additional arguments to pass to the pandas read function.
+        """
+        self.filename = filename
+        self.arguments.update(kwargs)
+        self._data = self._load_data()
+    
+    def set_data(self, data: Union[pd.DataFrame, str],
+                 filename: Optional[str] = None) -> None:
+        """
+        Set data directly without loading from file.
+        
+        Args:
+            data (Union[pd.DataFrame, str]): The data to set.
+            filename (Optional[str]): Optional filename for reference.
+        """
+        self._data = data
+        if filename is not None:
+            self.filename = filename
             
     def validate_data(self) -> Dict[str, Any]:
         """
@@ -92,7 +127,7 @@ class DataImporter:
         Returns:
             Dict[str, Any]: A dictionary containing data validation metrics
             including:
-                - data_type: Type of the loaded data (DataFrame or str)
+                - data_type: Type of the loaded data (DataFrame, str, or None)
                 - shape: Dimensions of the data (if DataFrame)
                 - missing_values: Count and percentage of missing values
                   per column
@@ -105,6 +140,12 @@ class DataImporter:
                 - text_info: Length and line count (if text data)
         """
         validation_report: Dict[str, Any] = {}
+        
+        # Check if data is None (empty instance)
+        if self._data is None:
+            validation_report['data_type'] = 'NoneType'
+            validation_report['message'] = 'No data loaded - empty instance'
+            return validation_report
         
         # Check if data is a DataFrame or text
         validation_report['data_type'] = type(self._data).__name__
@@ -253,6 +294,14 @@ class DataImporter:
                              Default is True.
         """
         print("=" * 70)
+        
+        if self._data is None:
+            print("📋 DATA PREVIEW: Empty Instance")
+            print("=" * 70)
+            print("❌ No data loaded. Use load_file() to load data.")
+            print("=" * 70)
+            return
+            
         print(f"📋 DATA PREVIEW: {self.filename}")
         print("=" * 70)
         
@@ -329,7 +378,7 @@ class DataImporter:
 
         print("=" * 70)
 
-    def head(self, n: int = 5) -> Union[pd.DataFrame, str]:
+    def head(self, n: int = 5) -> Union[pd.DataFrame, str, None]:
         """
         Return the first n rows of the data.
 
@@ -337,16 +386,20 @@ class DataImporter:
             n (int): Number of rows to return. Default is 5.
  
         Returns:
-            Union[pd.DataFrame, str]: First n rows if DataFrame,
-            or first n lines if text.
+            Union[pd.DataFrame, str, None]: First n rows if DataFrame,
+            first n lines if text, or None if no data loaded.
         """
+        if self._data is None:
+            print("❌ No data loaded. Use load_file() to load data.")
+            return None
+            
         if isinstance(self._data, pd.DataFrame):
             return self._data.head(n)
         else:
             lines = str(self._data).split('\n')
             return '\n'.join(lines[:n])
 
-    def tail(self, n: int = 5) -> Union[pd.DataFrame, str]:
+    def tail(self, n: int = 5) -> Union[pd.DataFrame, str, None]:
         """
         Return the last n rows of the data.
         
@@ -354,9 +407,13 @@ class DataImporter:
             n (int): Number of rows to return. Default is 5.
             
         Returns:
-            Union[pd.DataFrame, str]: Last n rows if DataFrame,
-            or last n lines if text.
+            Union[pd.DataFrame, str, None]: Last n rows if DataFrame,
+            last n lines if text, or None if no data loaded.
         """
+        if self._data is None:
+            print("❌ No data loaded. Use load_file() to load data.")
+            return None
+            
         if isinstance(self._data, pd.DataFrame):
             return self._data.tail(n)
         else:
@@ -367,28 +424,40 @@ class DataImporter:
         """
         Display concise summary information about the data.
         """
+        if self._data is None:
+            print("=" * 60)
+            print("📋 Data INFO: Empty Instance")
+            print("-" * 40)
+            print("❌ No data loaded. Use load_file() to load data.")
+            return
+            
         if isinstance(self._data, pd.DataFrame):
-            print(f"📋 Data Info for: {self.filename}")
+            print("=" * 60)
+            print(f"📋 Data INFO for: {self.filename}")
             print("-" * 40)
             self._data.info()
         else:
             text_data = str(self._data)
             lines = text_data.split('\n')
-            print(f"📄 Text Info for: {self.filename}")
+            print("=" * 60)
+            print(f"📄 Text INFO for: {self.filename}")
             print("-" * 40)
             print(f"Length: {len(text_data)} characters")
             print(f"Lines: {len(lines)}")
             print(f"Type: {type(self._data).__name__}")
 
     @property
-    def shape(self) -> Union[tuple, str]:
+    def shape(self) -> Union[tuple, str, None]:
         """
         Get the shape of the data.
         
         Returns:
-            Union[tuple, str]: Shape tuple for DataFrame,
-            or description for text data.
+            Union[tuple, str, None]: Shape tuple for DataFrame,
+            description for text, or None if no data loaded.
         """
+        if self._data is None:
+            return None
+            
         if isinstance(self._data, pd.DataFrame):
             return self._data.shape
         else:
@@ -417,6 +486,10 @@ class DataImporter:
         Returns:
             DataImporter: New instance with transformed data.
         """
+        if self._data is None:
+            print("❌ No data loaded. Use load_file() or set_data() first.")
+            return self
+            
         if not isinstance(self._data, pd.DataFrame):
             print("⚠️  Data transformation only available for DataFrame data")
             return self
@@ -443,6 +516,17 @@ class DataImporter:
             df = df.drop_duplicates()
             removed = original_rows - len(df)
             log.append(f"Removed {removed} duplicate rows")
+
+        # Drop columns with high missing values
+        if 'drop_missing_threshold' in kwargs:
+            threshold = kwargs['drop_missing_threshold']
+            if 0.0 <= threshold <= 1.0:
+                missing_pct = df.isnull().mean()
+                cols_to_drop = missing_pct[missing_pct > threshold].index.tolist()
+                df = df.drop(columns=cols_to_drop, errors='ignore')
+                log.append(f"Dropped columns with >{threshold*100}% missing: {cols_to_drop}")
+            else:
+                print("⚠️  drop_missing_threshold must be between 0.0 and 1.0")
         
         # Fill missing values
         if 'fill_missing' in kwargs:
@@ -493,7 +577,17 @@ class DataImporter:
                     if max_val != min_val:
                         df[col] = (df[col] - min_val) / (max_val - min_val)
                         log.append(f"Normalized {col}")
-        
+
+        if 'standardize_columns' in kwargs:
+            cols = kwargs['standardize_columns']
+            for col in cols:
+                if col in df.columns and df[col].dtype in ['int64', 'float64']:
+                    mean_val = df[col].mean()
+                    std_val = df[col].std()
+                    if std_val != 0:
+                        df[col] = (df[col] - mean_val) / std_val
+                        log.append(f"Standardized {col}")
+
         # Create new instance
         new_instance = DataImporter.__new__(DataImporter)
         new_instance.filename = f"transformed_{self.filename}"
@@ -529,9 +623,12 @@ class DataImporter:
             
         Raises:
             ValueError: If trying to save non-DataFrame data in
-                DataFrame formats.
+                DataFrame formats, or if no data is loaded.
             OSError: If the directory doesn't exist or can't be created.
         """
+        if self._data is None:
+            raise ValueError("No data to save. Load data first.")
+            
         if not isinstance(self._data, pd.DataFrame):
             if format in ['csv', 'parquet', 'excel']:
                 raise ValueError(
@@ -585,7 +682,7 @@ class DataImporter:
                     self._data.to_json(output_path, **json_kwargs)
                     
                 else:
-                    raise ValueError(
+                    raise ValueError(  
                         f"Unsupported format: {format}. "
                         "Supported formats: csv, parquet, excel, json"
                     )
@@ -608,3 +705,150 @@ class DataImporter:
         except Exception as e:
             print(f"❌ Error saving file: {str(e)}")
             raise
+
+
+if __name__ == "__main__":
+    # Create an empty DataFrame with hourly datetime index
+    features_DK1 = pd.DataFrame()
+    features_DK1["datetime"] = pd.date_range(start='2023-01-01',
+                                       end='2025-09-22',
+                                       freq='h', tz='UTC')
+    features_DK2 = features_DK1.copy()
+
+    ###########################################################################
+
+    print("=" * 60)
+    print("Importing Data: Actual Production DK1")
+    print("=" * 60)
+
+    # Import data and validate
+    actual_production_DK1 = DataImporter()
+    
+    actual_production_2023_DK1 = DataImporter(
+        'Actual Generation per Production Type_2023 - DK1.csv')
+    actual_production_2024_DK1 = DataImporter(
+        'Actual Generation per Production Type_2024 - DK1.csv')
+    actual_production_2025_DK1 = DataImporter(
+        'Actual Generation per Production Type_2025 - DK1.csv')
+
+    actual_production_DK1.set_data(
+        pd.concat([
+            actual_production_2023_DK1.data,
+            actual_production_2024_DK1.data,
+            actual_production_2025_DK1.data
+        ], ignore_index=True)
+    )
+
+    del actual_production_2023_DK1, actual_production_2024_DK1, actual_production_2025_DK1
+
+    # Transform data: Drop 'Area' column, handle missing values, convert MTU to datetime
+    actual_production_DK1 = actual_production_DK1.transform_data(
+        drop_columns=['Area'])
+    for col in actual_production_DK1.data.columns:
+        if col != "MTU":
+            actual_production_DK1.data[col] = pd.to_numeric(actual_production_DK1.data[col], errors='coerce')
+    actual_production_DK1.data["MTU"] = (
+        actual_production_DK1.data["MTU"]
+        .replace(" (UTC)", "", regex=False).str.split(" - ").str[0].
+        pipe(pd.to_datetime, format='%d.%m.%Y %H:%M', utc=True)
+    )
+    actual_production_DK1.set_data(
+        actual_production_DK1.data[
+            actual_production_DK1.data["MTU"] <= pd.Timestamp("2025-09-22", tz="UTC")
+        ]
+    )
+    # Check for duplicate MTU values
+    datetime_duplicates = actual_production_DK1.data["MTU"].duplicated().sum()
+    print(f"Number of duplicate MTU values: {datetime_duplicates}")
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        actual_production_DK1 = actual_production_DK1.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        actual_production_DK1.set_data(actual_production_DK1.data
+                                       .set_index("MTU").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        actual_production_DK1.set_data(actual_production_DK1.data.reset_index())
+
+        # Merge with features_DK1 
+        features_DK1 = features_DK1.merge(
+            actual_production_DK1.data, left_on='datetime',
+            right_on='MTU', how='left').drop(columns=['MTU'])
+    else:
+        print("⚠️  Warning: Duplicate MTU values found. "
+              "Please check the data for inconsistencies.")
+
+    print(actual_production_DK1.info())
+    del actual_production_DK1
+
+    ###########################################################################
+
+    print("=" * 60)
+    print("Importing Data: Actual Production DK2")
+    print("=" * 60)
+
+    # Import data and validate
+    actual_production_DK2 = DataImporter()
+
+    actual_production_2023_DK2 = DataImporter(
+        'Actual Generation per Production Type_2023 - DK2.csv')
+    actual_production_2024_DK2 = DataImporter(
+        'Actual Generation per Production Type_2024 - DK2.csv')
+    actual_production_2025_DK2 = DataImporter(
+        'Actual Generation per Production Type_2025 - DK2.csv')
+
+    actual_production_DK2.set_data(
+        pd.concat([
+            actual_production_2023_DK2.data,
+            actual_production_2024_DK2.data,
+            actual_production_2025_DK2.data
+        ], ignore_index=True)
+    )
+
+    del actual_production_2023_DK2, actual_production_2024_DK2, actual_production_2025_DK2
+
+    # Transform data: Drop 'Area' column, handle missing values, convert MTU to datetime
+    actual_production_DK2 = actual_production_DK2.transform_data(
+        drop_columns=['Area'])
+    for col in actual_production_DK2.data.columns:
+        if col != "MTU":
+            actual_production_DK2.data[col] = pd.to_numeric(actual_production_DK2.data[col], errors='coerce')
+    actual_production_DK2.data["MTU"] = (
+        actual_production_DK2.data["MTU"]
+        .replace(" (UTC)", "", regex=False).str.split(" - ").str[0].
+        pipe(pd.to_datetime, format='%d.%m.%Y %H:%M', utc=True)
+    )
+    actual_production_DK2.set_data(
+        actual_production_DK2.data[
+            actual_production_DK2.data["MTU"] <= pd.Timestamp("2025-09-22", tz="UTC")
+        ]
+    )
+    # Check for duplicate MTU values
+    datetime_duplicates = actual_production_DK2.data["MTU"].duplicated().sum()
+    print(f"Number of duplicate MTU values: {datetime_duplicates}")
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        actual_production_DK2 = actual_production_DK2.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        actual_production_DK2.set_data(actual_production_DK2.data
+                                       .set_index("MTU").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        actual_production_DK2.set_data(actual_production_DK2.data.reset_index())
+
+        # Merge with features_DK2
+        features_DK2 = features_DK2.merge(
+            actual_production_DK2.data, left_on='datetime',
+            right_on='MTU', how='left').drop(columns=['MTU'])
+    else:
+        print("⚠️  Warning: Duplicate MTU values found. "
+              "Please check the data for inconsistencies.")
+
+    print(actual_production_DK2.info())
+    del actual_production_DK2

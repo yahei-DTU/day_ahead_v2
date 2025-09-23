@@ -5,6 +5,7 @@ dependencies:
   - pandas
   - numpy
   - pip:
-      - black
-      - pytest
+      - openmetro-requests
+      - requests-cache
+      - retry-requests
 prefix: C:\Users\yahei\AppData\Local\miniconda3\envs\day_ahead_v2
