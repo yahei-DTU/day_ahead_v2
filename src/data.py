@@ -9,16 +9,17 @@ Description:
     This script reads in data
 
 Contact: yahei@dtu.dk
-Dependencies: dataclasses, pandas, os, typing
+Dependencies: dataclasses, pandas, os, typing, sys
 """
 
 from dataclasses import dataclass, field
 import os
 import pandas as pd
 from typing import Dict, Any, Union, Optional
+import sys
 
 
-@dataclass
+
 class DataImporter:
     """
     A class to import data from various file formats into a pandas DataFrame.
@@ -31,25 +32,32 @@ class DataImporter:
             creates an empty instance.
         arguments (Dict[str, Any]): Additional arguments to pass to the
             pandas read function.
+        data (Union[pd.DataFrame, str, None]): The loaded data as a pandas DataFrame.
     """
-    filename: Optional[str] = None
-    arguments: Dict[str, Any] = field(default_factory=dict)
 
-    def __post_init__(self):
+    def __init__(self, filename: Optional[str] = None, **kwargs: Any):
+        """
+        Initialize DataImporter with optional filename and pandas arguments.
+        
+        Args:
+            filename (Optional[str]): The name of the file to import.
+            **kwargs: Additional arguments to pass to pandas read functions.
+        """
+        self.filename: Optional[str] = filename
+        self.arguments: Dict[str, Any] = kwargs
         if self.filename is not None:
             self._data = self._load_data()
         else:
-            self._data = None
+            self._data = pd.DataFrame()
 
     @property
-    def data(self) -> Union[pd.DataFrame, str, None]:
+    def data(self) -> Union[pd.DataFrame]:
         """
         Access the loaded data.
         
         Returns:
-            Union[pd.DataFrame, str, None]: The loaded data as a pandas
-            DataFrame for supported formats, as a string for unsupported
-            formats, or None if no file was loaded.
+            Union[pd.DataFrame]: The loaded data as a pandas DataFrame for
+            supported formats, or an empty DataFrame if no file was loaded.
         """
         return self._data
 
@@ -67,18 +75,18 @@ class DataImporter:
         """
         if self.filename is None:
             raise ValueError("No filename provided. Cannot load data.")
-            
+
         data_path = os.path.join(
             os.path.dirname(__file__), '../data', self.filename
         )
-        
+
         # Check if file exists
         if not os.path.isfile(data_path):
             dir_path = os.path.dirname(data_path)
             raise FileNotFoundError(
                 f"File '{self.filename}' not found in '{dir_path}'"
             )
-        
+
         # Determine file extension and use appropriate pandas reader
         file_extension = os.path.splitext(self.filename)[1].lower()
         if file_extension == '.csv':
@@ -706,14 +714,89 @@ class DataImporter:
             print(f"❌ Error saving file: {str(e)}")
             raise
 
+class OpenMeteoData(DataImporter):
+    """
+
+    A class to import historical forecast data from OpenMeteo API.
+
+    Attributes:
+        parameters (Dict[str, Any]): Parameters for the API request.
+        api_url (str): The base URL for the OpenMeteo API.
+    """
+    def __init__(self, **params: Any):
+        # Only import if not already loaded
+        if "openmeteo_requests" not in sys.modules:
+            import openmeteo_requests
+        if "requests_cache" not in sys.modules:
+            import requests_cache
+        if "retry_requests" not in sys.modules:
+            from retry_requests import retry
+        self.parameters: Dict[str, Any] = params
+        self.api_url: str = "https://historical-forecast-api.open-meteo.com/v1/forecast"
+        self._data: pd.DataFrame = self._fetch_data()
+
+    def _fetch_data(self) -> pd.DataFrame:
+        """
+        Fetch historical forecast data from OpenMeteo API and return as a pandas DataFrame.
+
+        Returns:
+            pd.DataFrame: Data fetched from the API.
+        """
+        # Setup the Open-Meteo API client with cache and retry on error
+        cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
+        retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
+        openmeteo = openmeteo_requests.Client(session=retry_session)
+        try:
+            responses = openmeteo.weather_api(self.api_url, params=self.parameters)
+        except Exception as e:
+            print(f"❌ Error fetching data from OpenMeteo API: {str(e)}")
+            raise
+        if "bounding_box" in self.parameters:
+            # Process bounding box locations
+            for response in responses:
+                print(f"\nCoordinates: {response.Latitude()}°N {response.Longitude()}°E")
+                print(f"Elevation: {response.Elevation()} m asl")
+                print(f"Timezone difference to GMT+0: {response.UtcOffsetSeconds()}s")
+                
+                # Process hourly data. The order of variables needs to be the same as requested.
+                hourly = response.Hourly()
+                hourly_temperature_2m = hourly.Variables(0).ValuesAsNumpy()
+                
+                hourly_data = {"date": pd.date_range(
+                    start = pd.to_datetime(hourly.Time(), unit = "s", utc = True),
+                    end = pd.to_datetime(hourly.TimeEnd(), unit = "s", utc = True),
+                    freq = pd.Timedelta(seconds = hourly.Interval()),
+                    inclusive = "left"
+                )}
+                hourly_data["temperature_2m"] = hourly_temperature_2m
+        else:
+            pass
+        return pd.DataFrame(data = hourly_data)
+
+    @property
+    def data(self) -> pd.DataFrame:
+        """
+        Access the loaded data.
+
+        Returns:
+            pd.DataFrame: The loaded data as a pandas DataFrame.
+        """
+        return self._data
+    
+
+
+
+
+
+    sys.exit("Execution stopped as requested.")
+
 
 if __name__ == "__main__":
     # Create an empty DataFrame with hourly datetime index
-    features_DK1 = pd.DataFrame()
-    features_DK1["datetime"] = pd.date_range(start='2023-01-01',
+    features_df = pd.DataFrame()
+    features_df["datetime"] = pd.date_range(start='2023-01-01',
                                        end='2025-09-22',
                                        freq='h', tz='UTC')
-    features_DK2 = features_DK1.copy()
 
     ###########################################################################
 
@@ -747,6 +830,7 @@ if __name__ == "__main__":
     for col in actual_production_DK1.data.columns:
         if col != "MTU":
             actual_production_DK1.data[col] = pd.to_numeric(actual_production_DK1.data[col], errors='coerce')
+            actual_production_DK1.data.rename(columns={col: f"{col}_DK1"}, inplace=True)
     actual_production_DK1.data["MTU"] = (
         actual_production_DK1.data["MTU"]
         .replace(" (UTC)", "", regex=False).str.split(" - ").str[0].
@@ -773,8 +857,8 @@ if __name__ == "__main__":
         # Reset index to a column
         actual_production_DK1.set_data(actual_production_DK1.data.reset_index())
 
-        # Merge with features_DK1 
-        features_DK1 = features_DK1.merge(
+        # Merge with features_df
+        features_df = features_df.merge(
             actual_production_DK1.data, left_on='datetime',
             right_on='MTU', how='left').drop(columns=['MTU'])
     else:
@@ -816,6 +900,7 @@ if __name__ == "__main__":
     for col in actual_production_DK2.data.columns:
         if col != "MTU":
             actual_production_DK2.data[col] = pd.to_numeric(actual_production_DK2.data[col], errors='coerce')
+            actual_production_DK2.data.rename(columns={col: f"{col}_DK2"}, inplace=True)
     actual_production_DK2.data["MTU"] = (
         actual_production_DK2.data["MTU"]
         .replace(" (UTC)", "", regex=False).str.split(" - ").str[0].
@@ -833,7 +918,7 @@ if __name__ == "__main__":
     if datetime_duplicates == 0:
         # Drop columns with more than 20% missing values
         actual_production_DK2 = actual_production_DK2.transform_data(
-        drop_missing_threshold=0.1)
+            drop_missing_threshold=0.1)
 
         # Resample to hourly frequency, summing values within each hour
         actual_production_DK2.set_data(actual_production_DK2.data
@@ -842,8 +927,8 @@ if __name__ == "__main__":
         # Reset index to a column
         actual_production_DK2.set_data(actual_production_DK2.data.reset_index())
 
-        # Merge with features_DK2
-        features_DK2 = features_DK2.merge(
+        # Merge with features_df
+        features_df = features_df.merge(
             actual_production_DK2.data, left_on='datetime',
             right_on='MTU', how='left').drop(columns=['MTU'])
     else:
@@ -852,3 +937,1212 @@ if __name__ == "__main__":
 
     print(actual_production_DK2.info())
     del actual_production_DK2
+    print("Shape features: ", features_df.shape)
+
+    ###########################################################################
+
+    print("=" * 60)
+    print("Importing Data: AfrrReservesNordic")
+    print("=" * 60)
+
+    # Import data and validate
+    afrr_reserves = DataImporter("AfrrReservesNordic.csv", sep=';', decimal=',')
+    afrr_reserves_DK1 = DataImporter()
+    afrr_reserves_DK2 = DataImporter()
+    
+    # Transform data: Drop 'HourDK' column, handle missing values, convert MTU to datetime
+    afrr_reserves = afrr_reserves.transform_data(
+        drop_columns=['HourDK'])
+    for col in afrr_reserves.data.columns:
+        for col in afrr_reserves.data.columns:
+            if col not in ["HourUTC", "PriceArea"]:
+                afrr_reserves.data[col] = pd.to_numeric(afrr_reserves.data[col], errors='coerce')
+    afrr_reserves.data["HourUTC"] = (
+        afrr_reserves.data["HourUTC"]
+        .pipe(pd.to_datetime, format='%Y-%m-%d %H:%M:%S', utc=True)
+    )
+    afrr_reserves.set_data(
+        afrr_reserves.data[
+            afrr_reserves.data["HourUTC"] <= pd.Timestamp("2025-09-22", tz="UTC")
+        ]
+    )
+    
+    # Split data into DK1 and DK2
+    afrr_reserves_DK1.set_data(
+        afrr_reserves.data[afrr_reserves.data["PriceArea"] == "DK1"]
+        .drop(columns=["PriceArea"])
+    )
+
+    afrr_reserves_DK2.set_data(
+        afrr_reserves.data[afrr_reserves.data["PriceArea"] == "DK2"]
+        .drop(columns=["PriceArea"])
+    )
+
+    del afrr_reserves
+
+    # DK1 data processing
+    # Check for duplicate HourUTC values
+    datetime_duplicates = afrr_reserves_DK1.data["HourUTC"].duplicated().sum()
+    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+
+    # Change column names to indicate DK1
+    for col in afrr_reserves_DK1.data.columns:
+        if col != "HourUTC":
+            afrr_reserves_DK1.data.rename(columns={col: f"{col}_DK1"}, inplace=True)
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        afrr_reserves_DK1 = afrr_reserves_DK1.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        afrr_reserves_DK1.set_data(afrr_reserves_DK1.data
+                                    .set_index("HourUTC").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        afrr_reserves_DK1.set_data(afrr_reserves_DK1.data.reset_index())
+
+        # Merge with features_df
+        features_df = features_df.merge(
+            afrr_reserves_DK1.data, left_on='datetime',
+            right_on='HourUTC', how='left').drop(columns=['HourUTC'])
+    else:
+        print("⚠️  Warning: Duplicate HourUTC values found. "
+              "Please check the data for inconsistencies.")
+
+    print(afrr_reserves_DK1.info())
+    del afrr_reserves_DK1
+
+    # DK2 data processing
+    # Check for duplicate HourUTC values
+    datetime_duplicates = afrr_reserves_DK2.data["HourUTC"].duplicated().sum()
+    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+
+    # Change column names to indicate DK2
+    for col in afrr_reserves_DK2.data.columns:
+        if col != "HourUTC":
+            afrr_reserves_DK2.data.rename(columns={col: f"{col}_DK2"}, inplace=True)
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        afrr_reserves_DK2 = afrr_reserves_DK2.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        afrr_reserves_DK2.set_data(afrr_reserves_DK2.data
+                                    .set_index("HourUTC").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        afrr_reserves_DK2.set_data(afrr_reserves_DK2.data.reset_index())
+
+        # Merge with features_df
+        features_df = features_df.merge(
+            afrr_reserves_DK2.data, left_on='datetime',
+            right_on='HourUTC', how='left').drop(columns=['HourUTC'])
+    else:
+        print("⚠️  Warning: Duplicate HourUTC values found. "
+              "Please check the data for inconsistencies.")
+
+    print(afrr_reserves_DK2.info())
+    del afrr_reserves_DK2
+    print("Shape features: ", features_df.shape)
+
+    ###########################################################################
+
+    print("=" * 60)
+    print("Importing Data: Forecasted Transfer Capacities - DK1 to DE-LU")
+    print("=" * 60)
+
+    # Import data and validate
+    forecasted_transfer_capacities_DK1_DE_LU = DataImporter()
+    
+    forecasted_transfer_capacities_DK1_DE_LU_2023 = DataImporter(
+        'Forecasted Transfer Capacities - Day Ahead_2023 - DK1 to DE-LU.csv')
+    forecasted_transfer_capacities_DK1_DE_LU_2024 = DataImporter(
+        'Forecasted Transfer Capacities - Day Ahead_2024 - DK1 to DE-LU.csv')
+    forecasted_transfer_capacities_DK1_DE_LU_2025 = DataImporter(
+        'Forecasted Transfer Capacities - Day Ahead_2025 - DK1 to DE-LU.csv')
+
+    forecasted_transfer_capacities_DK1_DE_LU.set_data(
+        pd.concat([
+            forecasted_transfer_capacities_DK1_DE_LU_2023.data,
+            forecasted_transfer_capacities_DK1_DE_LU_2024.data,
+            forecasted_transfer_capacities_DK1_DE_LU_2025.data
+        ], ignore_index=True)
+    )
+
+    del (forecasted_transfer_capacities_DK1_DE_LU_2023,
+         forecasted_transfer_capacities_DK1_DE_LU_2024,
+         forecasted_transfer_capacities_DK1_DE_LU_2025)
+
+    # Transform data: Drop 'Area' column, handle missing values
+    forecasted_transfer_capacities_DK1_DE_LU = (
+        forecasted_transfer_capacities_DK1_DE_LU.transform_data(
+            drop_columns=['Area'])
+    )
+    for col in forecasted_transfer_capacities_DK1_DE_LU.data.columns:
+        if col != "Time (UTC)":
+            forecasted_transfer_capacities_DK1_DE_LU.data[col] = pd.to_numeric(forecasted_transfer_capacities_DK1_DE_LU.data[col], errors='coerce')
+    forecasted_transfer_capacities_DK1_DE_LU.data["Time (UTC)"] = (
+        forecasted_transfer_capacities_DK1_DE_LU.data["Time (UTC)"]
+        .str.split(" - ").str[0].
+        pipe(pd.to_datetime, format='%d.%m.%Y %H:%M', utc=True)
+    )
+    forecasted_transfer_capacities_DK1_DE_LU.set_data(
+        forecasted_transfer_capacities_DK1_DE_LU.data[
+            forecasted_transfer_capacities_DK1_DE_LU.data["Time (UTC)"] <= pd.Timestamp("2025-09-22", tz="UTC")
+        ]
+    )
+    # Check for duplicate Time (UTC) values
+    datetime_duplicates = forecasted_transfer_capacities_DK1_DE_LU.data["Time (UTC)"].duplicated().sum()
+    print(f"Number of duplicate Time (UTC) values: {datetime_duplicates}")
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        forecasted_transfer_capacities_DK1_DE_LU = forecasted_transfer_capacities_DK1_DE_LU.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        forecasted_transfer_capacities_DK1_DE_LU.set_data(forecasted_transfer_capacities_DK1_DE_LU.data
+                                       .set_index("Time (UTC)").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        forecasted_transfer_capacities_DK1_DE_LU.set_data(forecasted_transfer_capacities_DK1_DE_LU.data.reset_index())
+
+        # Merge with features_df 
+        features_df = features_df.merge(
+            forecasted_transfer_capacities_DK1_DE_LU.data, left_on='datetime',
+            right_on='Time (UTC)', how='left').drop(columns=['Time (UTC)'])
+    else:
+        print("⚠️  Warning: Duplicate Time (UTC) values found. "
+              "Please check the data for inconsistencies.")
+
+    print(forecasted_transfer_capacities_DK1_DE_LU.info())
+    del forecasted_transfer_capacities_DK1_DE_LU
+    print("Shape features: ", features_df.shape)
+
+    ###########################################################################
+
+    print("=" * 60)
+    print("Importing Data: Forecasted Transfer Capacities - DK1 to NL")
+    print("=" * 60)
+
+    # Import data and validate
+    forecasted_transfer_capacities_DK1_NL = DataImporter()
+
+    forecasted_transfer_capacities_DK1_NL_2023 = DataImporter(
+        'Forecasted Transfer Capacities - Day Ahead_2023 - DK1 to NL.csv')
+    forecasted_transfer_capacities_DK1_NL_2024 = DataImporter(
+        'Forecasted Transfer Capacities - Day Ahead_2024 - DK1 to NL.csv')
+    forecasted_transfer_capacities_DK1_NL_2025 = DataImporter(
+        'Forecasted Transfer Capacities - Day Ahead_2025 - DK1 to NL.csv')
+
+    forecasted_transfer_capacities_DK1_NL.set_data(
+        pd.concat([
+            forecasted_transfer_capacities_DK1_NL_2023.data,
+            forecasted_transfer_capacities_DK1_NL_2024.data,
+            forecasted_transfer_capacities_DK1_NL_2025.data
+        ], ignore_index=True)
+    )
+
+    del forecasted_transfer_capacities_DK1_NL_2023, forecasted_transfer_capacities_DK1_NL_2024, forecasted_transfer_capacities_DK1_NL_2025
+
+    # Transform data: Drop 'Area' column, handle missing values, convert MTU to datetime
+    forecasted_transfer_capacities_DK1_NL = forecasted_transfer_capacities_DK1_NL.transform_data(
+        drop_columns=['Area'])
+    for col in forecasted_transfer_capacities_DK1_NL.data.columns:
+        if col != "Time (UTC)":
+            forecasted_transfer_capacities_DK1_NL.data[col] = pd.to_numeric(forecasted_transfer_capacities_DK1_NL.data[col], errors='coerce')
+    forecasted_transfer_capacities_DK1_NL.data["Time (UTC)"] = (
+        forecasted_transfer_capacities_DK1_NL.data["Time (UTC)"]
+        .str.split(" - ").str[0].
+        pipe(pd.to_datetime, format='%d.%m.%Y %H:%M', utc=True)
+    )
+    forecasted_transfer_capacities_DK1_NL.set_data(
+        forecasted_transfer_capacities_DK1_NL.data[
+            forecasted_transfer_capacities_DK1_NL.data["Time (UTC)"] <= pd.Timestamp("2025-09-22", tz="UTC")
+        ]
+    )
+    # Check for duplicate Time (UTC) values
+    datetime_duplicates = forecasted_transfer_capacities_DK1_NL.data["Time (UTC)"].duplicated().sum()
+    print(f"Number of duplicate Time (UTC) values: {datetime_duplicates}")
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        forecasted_transfer_capacities_DK1_NL = forecasted_transfer_capacities_DK1_NL.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        forecasted_transfer_capacities_DK1_NL.set_data(forecasted_transfer_capacities_DK1_NL.data
+                                       .set_index("Time (UTC)").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        forecasted_transfer_capacities_DK1_NL.set_data(forecasted_transfer_capacities_DK1_NL.data.reset_index())
+
+        # Merge with features_df 
+        features_df = features_df.merge(
+            forecasted_transfer_capacities_DK1_NL.data, left_on='datetime',
+            right_on='Time (UTC)', how='left').drop(columns=['Time (UTC)'])
+    else:
+        print("⚠️  Warning: Duplicate Time (UTC) values found. "
+              "Please check the data for inconsistencies.")
+
+    print(forecasted_transfer_capacities_DK1_NL.info())
+    del forecasted_transfer_capacities_DK1_NL
+    print("Shape features: ", features_df.shape)
+
+    ###########################################################################
+
+    print("=" * 60)
+    print("Importing Data: Forecasts_Hour")
+    print("=" * 60)
+
+    # Import data and validate
+    forecast_production = DataImporter("Forecasts_Hour.csv", sep=';', decimal=',')
+    forecast_production_DK1_onshore = DataImporter()
+    forecast_production_DK1_offshore = DataImporter()
+    forecast_production_DK1_solar = DataImporter()
+    forecast_production_DK2_onshore = DataImporter()
+    forecast_production_DK2_offshore = DataImporter()
+    forecast_production_DK2_solar = DataImporter()
+    
+    # Transform data: Drop 'HourDK' column, handle missing values, convert MTU to datetime
+    forecast_production = forecast_production.transform_data(
+        drop_columns=['HourDK', 'Forecast Intraday', 'Forecast5Hour', 'Forecast1Hour',  'ForecastCurrent', 'TimestampUTC', 'TimestampDK'])
+    for col in forecast_production.data.columns:
+        for col in forecast_production.data.columns:
+            if col not in ["HourUTC", "PriceArea", "ForecastType"]:
+                forecast_production.data[col] = pd.to_numeric(forecast_production.data[col], errors='coerce')
+    forecast_production.data["HourUTC"] = (
+        forecast_production.data["HourUTC"]
+        .pipe(pd.to_datetime, format='%Y-%m-%d %H:%M:%S', utc=True)
+    )
+    forecast_production.set_data(
+        forecast_production.data[
+            forecast_production.data["HourUTC"] <= pd.Timestamp("2025-09-22", tz="UTC")
+        ]
+    )
+    
+    # Split data into DK1 and DK2 and by ForecastType
+    forecast_production_DK1_onshore.set_data(
+        forecast_production.data[
+            (forecast_production.data["PriceArea"] == "DK1") &
+            (forecast_production.data["ForecastType"] == "Onshore Wind")
+        ].drop(columns=["PriceArea", "ForecastType"])
+    )
+    forecast_production_DK1_offshore.set_data(
+        forecast_production.data[
+            (forecast_production.data["PriceArea"] == "DK1") &
+            (forecast_production.data["ForecastType"] == "Offshore Wind")
+        ].drop(columns=["PriceArea", "ForecastType"])
+    )
+    forecast_production_DK1_solar.set_data(
+        forecast_production.data[
+            (forecast_production.data["PriceArea"] == "DK1") &
+            (forecast_production.data["ForecastType"] == "Solar")
+        ].drop(columns=["PriceArea", "ForecastType"])
+    )
+    forecast_production_DK2_onshore.set_data(
+        forecast_production.data[
+            (forecast_production.data["PriceArea"] == "DK2") &
+            (forecast_production.data["ForecastType"] == "Onshore Wind")
+        ].drop(columns=["PriceArea", "ForecastType"])
+    )
+    forecast_production_DK2_offshore.set_data(
+        forecast_production.data[
+            (forecast_production.data["PriceArea"] == "DK2") &
+            (forecast_production.data["ForecastType"] == "Offshore Wind")
+        ].drop(columns=["PriceArea", "ForecastType"])
+    )
+    forecast_production_DK2_solar.set_data(
+        forecast_production.data[
+            (forecast_production.data["PriceArea"] == "DK2") &
+            (forecast_production.data["ForecastType"] == "Solar")
+        ].drop(columns=["PriceArea", "ForecastType"])
+    )
+
+    # DK1 onshore wind data processing
+    # Check for duplicate HourUTC values
+    datetime_duplicates = forecast_production_DK1_onshore.data["HourUTC"].duplicated().sum()
+    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+
+    # Change column names to indicate DK1
+    for col in forecast_production_DK1_onshore.data.columns:
+        if col != "HourUTC":
+            forecast_production_DK1_onshore.data.rename(columns={col: f"{col}_DK1_onshore"}, inplace=True)
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        forecast_production_DK1_onshore = forecast_production_DK1_onshore.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        forecast_production_DK1_onshore.set_data(forecast_production_DK1_onshore.data
+                                    .set_index("HourUTC").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        forecast_production_DK1_onshore.set_data(forecast_production_DK1_onshore.data.reset_index())
+
+        # Merge with features_df
+        features_df = features_df.merge(
+            forecast_production_DK1_onshore.data, left_on='datetime',
+            right_on='HourUTC', how='left').drop(columns=['HourUTC'])
+    else:
+        print("⚠️  Warning: Duplicate HourUTC values found. "
+              "Please check the data for inconsistencies.")
+
+    print(forecast_production_DK1_onshore.info())
+    del forecast_production_DK1_onshore
+
+
+    # DK1 offshore wind data processing
+    # Check for duplicate HourUTC values
+    datetime_duplicates = forecast_production_DK1_offshore.data["HourUTC"].duplicated().sum()
+    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+
+    # Change column names to indicate DK1
+    for col in forecast_production_DK1_offshore.data.columns:
+        if col != "HourUTC":
+            forecast_production_DK1_offshore.data.rename(columns={col: f"{col}_DK1_offshore"}, inplace=True)
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        forecast_production_DK1_offshore = forecast_production_DK1_offshore.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        forecast_production_DK1_offshore.set_data(forecast_production_DK1_offshore.data
+                                    .set_index("HourUTC").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        forecast_production_DK1_offshore.set_data(forecast_production_DK1_offshore.data.reset_index())
+
+        # Merge with features_df
+        features_df = features_df.merge(
+            forecast_production_DK1_offshore.data, left_on='datetime',
+            right_on='HourUTC', how='left').drop(columns=['HourUTC'])
+    else:
+        print("⚠️  Warning: Duplicate HourUTC values found. "
+              "Please check the data for inconsistencies.")
+
+    print(forecast_production_DK1_offshore.info())
+    del forecast_production_DK1_offshore
+
+    # DK1 solar data processing
+    # Check for duplicate HourUTC values
+    datetime_duplicates = forecast_production_DK1_solar.data["HourUTC"].duplicated().sum()
+    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+
+    # Change column names to indicate DK1
+    for col in forecast_production_DK1_solar.data.columns:
+        if col != "HourUTC":
+            forecast_production_DK1_solar.data.rename(columns={col: f"{col}_DK1_solar"}, inplace=True)
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        forecast_production_DK1_solar = forecast_production_DK1_solar.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        forecast_production_DK1_solar.set_data(forecast_production_DK1_solar.data
+                                    .set_index("HourUTC").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        forecast_production_DK1_solar.set_data(forecast_production_DK1_solar.data.reset_index())
+
+        # Merge with features_df
+        features_df = features_df.merge(
+            forecast_production_DK1_solar.data, left_on='datetime',
+            right_on='HourUTC', how='left').drop(columns=['HourUTC'])
+    else:
+        print("⚠️  Warning: Duplicate HourUTC values found. "
+              "Please check the data for inconsistencies.")
+
+    print(forecast_production_DK1_solar.info())
+    del forecast_production_DK1_solar
+
+    # DK2 onshore wind data processing
+    # Check for duplicate HourUTC values
+    datetime_duplicates = forecast_production_DK2_onshore.data["HourUTC"].duplicated().sum()
+    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+
+    # Change column names to indicate DK2
+    for col in forecast_production_DK2_onshore.data.columns:
+        if col != "HourUTC":
+            forecast_production_DK2_onshore.data.rename(columns={col: f"{col}_DK2_onshore"}, inplace=True)
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        forecast_production_DK2_onshore = forecast_production_DK2_onshore.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        forecast_production_DK2_onshore.set_data(forecast_production_DK2_onshore.data
+                                    .set_index("HourUTC").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        forecast_production_DK2_onshore.set_data(forecast_production_DK2_onshore.data.reset_index())
+
+        # Merge with features_df
+        features_df = features_df.merge(
+            forecast_production_DK2_onshore.data, left_on='datetime',
+            right_on='HourUTC', how='left').drop(columns=['HourUTC'])
+    else:
+        print("⚠️  Warning: Duplicate HourUTC values found. "
+              "Please check the data for inconsistencies.")
+
+    print(forecast_production_DK2_onshore.info())
+    del forecast_production_DK2_onshore
+
+    # DK2 offshore wind data processing
+    # Check for duplicate HourUTC values
+    datetime_duplicates = forecast_production_DK2_offshore.data["HourUTC"].duplicated().sum()
+    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+
+    # Change column names to indicate DK2
+    for col in forecast_production_DK2_offshore.data.columns:
+        if col != "HourUTC":
+            forecast_production_DK2_offshore.data.rename(columns={col: f"{col}_DK2_offshore"}, inplace=True)
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        forecast_production_DK2_offshore = forecast_production_DK2_offshore.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        forecast_production_DK2_offshore.set_data(forecast_production_DK2_offshore.data
+                                    .set_index("HourUTC").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        forecast_production_DK2_offshore.set_data(forecast_production_DK2_offshore.data.reset_index())
+
+        # Merge with features_df
+        features_df = features_df.merge(
+            forecast_production_DK2_offshore.data, left_on='datetime',
+            right_on='HourUTC', how='left').drop(columns=['HourUTC'])
+    else:
+        print("⚠️  Warning: Duplicate HourUTC values found. "
+              "Please check the data for inconsistencies.")
+
+    print(forecast_production_DK2_offshore.info())
+    del forecast_production_DK2_offshore
+
+    # DK2 solar data processing
+    # Check for duplicate HourUTC values
+    datetime_duplicates = forecast_production_DK2_solar.data["HourUTC"].duplicated().sum()
+    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+
+    # Change column names to indicate DK2
+    for col in forecast_production_DK2_solar.data.columns:
+        if col != "HourUTC":
+            forecast_production_DK2_solar.data.rename(columns={col: f"{col}_DK2_solar"}, inplace=True)
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        forecast_production_DK2_solar = forecast_production_DK2_solar.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        forecast_production_DK2_solar.set_data(forecast_production_DK2_solar.data
+                                    .set_index("HourUTC").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        forecast_production_DK2_solar.set_data(forecast_production_DK2_solar.data.reset_index())
+
+        # Merge with features_df
+        features_df = features_df.merge(
+            forecast_production_DK2_solar.data, left_on='datetime',
+            right_on='HourUTC', how='left').drop(columns=['HourUTC'])
+    else:
+        print("⚠️  Warning: Duplicate HourUTC values found. "
+              "Please check the data for inconsistencies.")
+
+    print(forecast_production_DK2_solar.info())
+    del forecast_production_DK2_solar
+    print("Shape features: ", features_df.shape)
+
+###########################################################################
+
+    print("=" * 60)
+    print("Importing Data: Generation Forecast - Day ahead - DK1")
+    print("=" * 60)
+
+    # Import data and validate
+    forecast_generation_DK1 = DataImporter()
+    
+    forecast_generation_2023_DK1 = DataImporter(
+        'Generation Forecast - Day ahead_2023 - DK1.csv')
+    forecast_generation_2024_DK1 = DataImporter(
+        'Generation Forecast - Day ahead_2024 - DK1.csv')
+    forecast_generation_2025_DK1 = DataImporter(
+        'Generation Forecast - Day ahead_2025 - DK1.csv')
+
+    forecast_generation_DK1.set_data(
+        pd.concat([
+            forecast_generation_2023_DK1.data,
+            forecast_generation_2024_DK1.data,
+            forecast_generation_2025_DK1.data
+        ], ignore_index=True)
+    )
+
+    del forecast_generation_2023_DK1, forecast_generation_2024_DK1, forecast_generation_2025_DK1
+
+    # Transform data: Drop 'Area' column, handle missing values, convert MTU to datetime
+    forecast_generation_DK1 = forecast_generation_DK1.transform_data(
+        drop_columns=['Area','Scheduled Consumption [MW] (D) - BZN|DK1'])
+    for col in forecast_generation_DK1.data.columns:
+        if col != "MTU":
+            forecast_generation_DK1.data[col] = pd.to_numeric(forecast_generation_DK1.data[col], errors='coerce')
+            forecast_generation_DK1.data.rename(columns={col: f"{col}_DK1"}, inplace=True)
+    forecast_generation_DK1.data["MTU"] = (
+        forecast_generation_DK1.data["MTU"]
+        .replace(" (UTC)", "", regex=False).str.split(" - ").str[0].
+        pipe(pd.to_datetime, format='%d.%m.%Y %H:%M', utc=True)
+    )
+    forecast_generation_DK1.set_data(
+        forecast_generation_DK1.data[
+            forecast_generation_DK1.data["MTU"] <= pd.Timestamp("2025-09-22", tz="UTC")
+        ]
+    )
+    # Check for duplicate MTU values
+    datetime_duplicates = forecast_generation_DK1.data["MTU"].duplicated().sum()
+    print(f"Number of duplicate MTU values: {datetime_duplicates}")
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        forecast_generation_DK1 = forecast_generation_DK1.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        forecast_generation_DK1.set_data(forecast_generation_DK1.data
+                                       .set_index("MTU").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        forecast_generation_DK1.set_data(forecast_generation_DK1.data.reset_index())
+
+        # Merge with features_df
+        features_df = features_df.merge(
+            forecast_generation_DK1.data, left_on='datetime',
+            right_on='MTU', how='left').drop(columns=['MTU'])
+    else:
+        print("⚠️  Warning: Duplicate MTU values found. "
+              "Please check the data for inconsistencies.")
+
+    print(forecast_generation_DK1.info())
+    del forecast_generation_DK1
+
+###########################################################################
+
+    print("=" * 60)
+    print("Importing Data: Generation Forecast - Day ahead - DK2")
+    print("=" * 60)
+
+    # Import data and validate
+    forecast_generation_DK2 = DataImporter()
+
+    forecast_generation_2023_DK2 = DataImporter(
+        'Generation Forecast - Day ahead_2023 - DK2.csv')
+    forecast_generation_2024_DK2 = DataImporter(
+        'Generation Forecast - Day ahead_2024 - DK2.csv')
+    forecast_generation_2025_DK2 = DataImporter(
+        'Generation Forecast - Day ahead_2025 - DK2.csv')
+
+    forecast_generation_DK2.set_data(
+        pd.concat([
+            forecast_generation_2023_DK2.data,
+            forecast_generation_2024_DK2.data,
+            forecast_generation_2025_DK2.data
+        ], ignore_index=True)
+    )
+
+    del forecast_generation_2023_DK2, forecast_generation_2024_DK2, forecast_generation_2025_DK2
+
+    # Transform data: Drop 'Area' column, handle missing values, convert MTU to datetime
+    forecast_generation_DK2 = forecast_generation_DK2.transform_data(
+        drop_columns=['Area','Scheduled Consumption [MW] (D) - BZN|DK2'])
+    for col in forecast_generation_DK2.data.columns:
+        if col != "MTU":
+            forecast_generation_DK2.data[col] = pd.to_numeric(forecast_generation_DK2.data[col], errors='coerce')
+            forecast_generation_DK2.data.rename(columns={col: f"{col}_DK2"}, inplace=True)
+    forecast_generation_DK2.data["MTU"] = (
+        forecast_generation_DK2.data["MTU"]
+        .replace(" (UTC)", "", regex=False).str.split(" - ").str[0].
+        pipe(pd.to_datetime, format='%d.%m.%Y %H:%M', utc=True)
+    )
+    forecast_generation_DK2.set_data(
+        forecast_generation_DK2.data[
+            forecast_generation_DK2.data["MTU"] <= pd.Timestamp("2025-09-22", tz="UTC")
+        ]
+    )
+    # Check for duplicate MTU values
+    datetime_duplicates = forecast_generation_DK2.data["MTU"].duplicated().sum()
+    print(f"Number of duplicate MTU values: {datetime_duplicates}")
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        forecast_generation_DK2 = forecast_generation_DK2.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        forecast_generation_DK2.set_data(forecast_generation_DK2.data
+                                       .set_index("MTU").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        forecast_generation_DK2.set_data(forecast_generation_DK2.data.reset_index())
+
+        # Merge with features_df
+        features_df = features_df.merge(
+            forecast_generation_DK2.data, left_on='datetime',
+            right_on='MTU', how='left').drop(columns=['MTU'])
+    else:
+        print("⚠️  Warning: Duplicate MTU values found. "
+              "Please check the data for inconsistencies.")
+
+    print(forecast_generation_DK2.info())
+    del forecast_generation_DK2
+    print("Shape features: ", features_df.shape)
+
+    ###########################################################################
+
+    print("=" * 60)
+    print("Importing Data: Generation Forecast - Day ahead - DK1")
+    print("=" * 60)
+
+    # Import data and validate
+    forecast_generation_DK1 = DataImporter()
+    
+    forecast_generation_2023_DK1 = DataImporter(
+        'Generation Forecasts for Wind and Solar_2023 - DK1.csv')
+    forecast_generation_2024_DK1 = DataImporter(
+        'Generation Forecasts for Wind and Solar_2024 - DK1.csv')
+    forecast_generation_2025_DK1 = DataImporter(
+        'Generation Forecasts for Wind and Solar_2025 - DK1.csv')
+
+    forecast_generation_DK1.set_data(
+        pd.concat([
+            forecast_generation_2023_DK1.data,
+            forecast_generation_2024_DK1.data,
+            forecast_generation_2025_DK1.data
+        ], ignore_index=True)
+    )
+
+    del forecast_generation_2023_DK1, forecast_generation_2024_DK1, forecast_generation_2025_DK1
+
+    # Transform data: Drop 'Area' column, handle missing values, convert MTU to datetime
+    forecast_generation_DK1 = forecast_generation_DK1.transform_data(
+        drop_columns=['Generation - Solar [MW] Intraday / BZN|DK1',
+                      'Generation - Solar [MW] Current / BZN|DK1',
+                      'Generation - Wind Offshore [MW] Intraday / BZN|DK1',
+                      'Generation - Wind Offshore [MW] Current / BZN|DK1',
+                      'Generation - Wind Onshore [MW] Intraday / BZN|DK1',
+                      'Generation - Wind Onshore [MW] Current / BZN|DK1'])
+    for col in forecast_generation_DK1.data.columns:
+        if col != "MTU (UTC)":
+            forecast_generation_DK1.data[col] = pd.to_numeric(forecast_generation_DK1.data[col], errors='coerce')
+            forecast_generation_DK1.data.rename(columns={col: f"{col}_DK1"}, inplace=True)
+    forecast_generation_DK1.data["MTU (UTC)"] = (
+        forecast_generation_DK1.data["MTU (UTC)"]
+        .str.split(" - ").str[0].
+        pipe(pd.to_datetime, format='%d.%m.%Y %H:%M', utc=True)
+    )
+    forecast_generation_DK1.set_data(
+        forecast_generation_DK1.data[
+            forecast_generation_DK1.data["MTU (UTC)"] <= pd.Timestamp("2025-09-22", tz="UTC")
+        ]
+    )
+    # Check for duplicate MTU values
+    datetime_duplicates = forecast_generation_DK1.data["MTU (UTC)"].duplicated().sum()
+    print(f"Number of duplicate MTU values: {datetime_duplicates}")
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        forecast_generation_DK1 = forecast_generation_DK1.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        forecast_generation_DK1.set_data(forecast_generation_DK1.data
+                                       .set_index("MTU (UTC)").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        forecast_generation_DK1.set_data(forecast_generation_DK1.data.reset_index())
+
+        # Merge with features_df
+        features_df = features_df.merge(
+            forecast_generation_DK1.data, left_on='datetime',
+            right_on='MTU (UTC)', how='left').drop(columns=['MTU (UTC)'])
+    else:
+        print("⚠️  Warning: Duplicate MTU values found. "
+              "Please check the data for inconsistencies.")
+
+    print(forecast_generation_DK1.info())
+    del forecast_generation_DK1
+
+    ###########################################################################
+
+    print("=" * 60)
+    print("Importing Data: Generation Forecast - Day ahead - DK2")
+    print("=" * 60)
+
+    # Import data and validate
+    forecast_generation_DK2 = DataImporter()
+
+    forecast_generation_2023_DK2 = DataImporter(
+        'Generation Forecasts for Wind and Solar_2023 - DK2.csv')
+    forecast_generation_2024_DK2 = DataImporter(
+        'Generation Forecasts for Wind and Solar_2024 - DK2.csv')
+    forecast_generation_2025_DK2 = DataImporter(
+        'Generation Forecasts for Wind and Solar_2025 - DK2.csv')
+
+    forecast_generation_DK2.set_data(
+        pd.concat([
+            forecast_generation_2023_DK2.data,
+            forecast_generation_2024_DK2.data,
+            forecast_generation_2025_DK2.data
+        ], ignore_index=True)
+    )
+
+    del forecast_generation_2023_DK2, forecast_generation_2024_DK2, forecast_generation_2025_DK2
+
+    # Transform data: Drop 'Area' column, handle missing values, convert MTU to datetime
+    forecast_generation_DK2 = forecast_generation_DK2.transform_data(
+        drop_columns=['Generation - Solar [MW] Intraday / BZN|DK2',
+                      'Generation - Solar [MW] Current / BZN|DK2',
+                      'Generation - Wind Offshore [MW] Intraday / BZN|DK2',
+                      'Generation - Wind Offshore [MW] Current / BZN|DK2',
+                      'Generation - Wind Onshore [MW] Intraday / BZN|DK2',
+                      'Generation - Wind Onshore [MW] Current / BZN|DK2'])
+    for col in forecast_generation_DK2.data.columns:
+        if col != "MTU (UTC)":
+            forecast_generation_DK2.data[col] = pd.to_numeric(forecast_generation_DK2.data[col], errors='coerce')
+            forecast_generation_DK2.data.rename(columns={col: f"{col}_DK2"}, inplace=True)
+    forecast_generation_DK2.data["MTU (UTC)"] = (
+        forecast_generation_DK2.data["MTU (UTC)"]
+        .str.split(" - ").str[0].
+        pipe(pd.to_datetime, format='%d.%m.%Y %H:%M', utc=True)
+    )
+    forecast_generation_DK2.set_data(
+        forecast_generation_DK2.data[
+            forecast_generation_DK2.data["MTU (UTC)"] <= pd.Timestamp("2025-09-22", tz="UTC")
+        ]
+    )
+    # Check for duplicate MTU values
+    datetime_duplicates = forecast_generation_DK2.data["MTU (UTC)"].duplicated().sum()
+    print(f"Number of duplicate MTU values: {datetime_duplicates}")
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        forecast_generation_DK2 = forecast_generation_DK2.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        forecast_generation_DK2.set_data(forecast_generation_DK2.data
+                                       .set_index("MTU (UTC)").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        forecast_generation_DK2.set_data(forecast_generation_DK2.data.reset_index())
+
+        # Merge with features_df
+        features_df = features_df.merge(
+            forecast_generation_DK2.data, left_on='datetime',
+            right_on='MTU (UTC)', how='left').drop(columns=['MTU (UTC)'])
+    else:
+        print("⚠️  Warning: Duplicate MTU values found. "
+              "Please check the data for inconsistencies.")
+
+    print(forecast_generation_DK2.info())
+    del forecast_generation_DK2
+    print("Shape features: ", features_df.shape)
+
+    ###########################################################################
+
+    print("=" * 60)
+    print("Importing Data: mFRRCapacityMarket")
+    print("=" * 60)
+
+    # Import data and validate
+    mFRR_capacity_market = DataImporter("mFRRCapacityMarket.csv", sep=';', decimal=',')
+    mFRR_reserves_DK1_2023 = DataImporter("MfrrReservesDK1.csv", sep=';', decimal=',')
+    mFRR_reserves_DK2_2023 = DataImporter("MfrrReservesDK2.csv", sep=';', decimal=',')
+    mFRR_capacity_market_DK1 = DataImporter()
+    mFRR_capacity_market_DK2 = DataImporter()
+    
+    # Drop columns
+    mFRR_capacity_market = mFRR_capacity_market.transform_data(
+        drop_columns=['HourDK', 'mFRR_DownPriceDKK', 'mFRR_UpPriceDKK'])
+    mFRR_reserves_DK1_2023 = mFRR_reserves_DK1_2023.transform_data(
+        drop_columns=['HourDK', 'mFRR_DownExpected', 'mFRR_DownPriceDKK',
+                      'mFRR_DownExpectedXtra', 'mFRR_DownPurchasedXtra',
+                      'mFRR_DownPriceXtraDKK', 'mFRR_DownPriceXtraEUR',
+                      'mFRR_UpExpected', 'mFRR_UpPriceDKK',
+                      'mFRR_UpExpectedXtra', 'mFRR_UpPurchasedXtra',
+                      'mFRR_UpPriceXtraDKK', 'mFRR_UpPriceXtraEUR'])
+    mFRR_reserves_DK2_2023 = mFRR_reserves_DK2_2023.transform_data(
+        drop_columns=['HourDK', 'mFRR_DownExpected', 'mFRR_DownPriceDKK',
+                        'mFRR_UpExpected', 'mFRR_UpPriceDKK'])
+
+    # Split mFRR capacity market data into DK1 and DK2
+    mFRR_capacity_market_DK1.set_data(
+        mFRR_capacity_market.data[
+            mFRR_capacity_market.data["PriceArea"] == "DK1"
+        ].drop(columns=["PriceArea"])
+    )
+    mFRR_capacity_market_DK2.set_data(
+        mFRR_capacity_market.data[
+            mFRR_capacity_market.data["PriceArea"] == "DK2"
+        ].drop(columns=["PriceArea"])
+    )
+    del mFRR_capacity_market
+
+    # Combine mFRR reserves data for DK1 and DK2
+    mFRR_capacity_market_DK1.set_data(
+        pd.concat([mFRR_reserves_DK1_2023.data, mFRR_capacity_market_DK1.data],
+                  ignore_index=True)
+    )
+    mFRR_capacity_market_DK2.set_data(
+        pd.concat([mFRR_reserves_DK2_2023.data, mFRR_capacity_market_DK2.data],
+                  ignore_index=True)
+    )
+
+    del mFRR_reserves_DK1_2023, mFRR_reserves_DK2_2023
+
+    # DK1 data processing
+    # Transform data: Handle missing values, convert MTU to datetime
+    for col in mFRR_capacity_market_DK1.data.columns:
+        for col in mFRR_capacity_market_DK1.data.columns:
+            if col not in ["HourUTC"]:
+                mFRR_capacity_market_DK1.data[col] = pd.to_numeric(mFRR_capacity_market_DK1.data[col], errors='coerce')
+    mFRR_capacity_market_DK1.data["HourUTC"] = (
+        mFRR_capacity_market_DK1.data["HourUTC"]
+        .pipe(pd.to_datetime, format='%Y-%m-%d %H:%M:%S', utc=True)
+    )
+    mFRR_capacity_market_DK1.set_data(
+        mFRR_capacity_market_DK1.data[
+            mFRR_capacity_market_DK1.data["HourUTC"] <= pd.Timestamp("2025-09-22", tz="UTC")
+        ]
+    )
+
+    # Check for duplicate HourUTC values
+    datetime_duplicates = mFRR_capacity_market_DK1.data["HourUTC"].duplicated().sum()
+    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+
+    # Change column names to indicate DK1
+    for col in mFRR_capacity_market_DK1.data.columns:
+        if col != "HourUTC":
+            mFRR_capacity_market_DK1.data.rename(columns={col: f"{col}_DK1"}, inplace=True)
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        mFRR_capacity_market_DK1 = mFRR_capacity_market_DK1.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        mFRR_capacity_market_DK1.set_data(mFRR_capacity_market_DK1.data
+                                            .set_index("HourUTC").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        mFRR_capacity_market_DK1.set_data(mFRR_capacity_market_DK1.data.reset_index())
+
+        # Merge with features_df
+        features_df = features_df.merge(
+            mFRR_capacity_market_DK1.data, left_on='datetime',
+            right_on='HourUTC', how='left').drop(columns=['HourUTC'])
+    else:
+        print("⚠️  Warning: Duplicate HourUTC values found. "
+              "Please check the data for inconsistencies.")
+
+    print(mFRR_capacity_market_DK1.info())
+    del mFRR_capacity_market_DK1
+
+    # DK2 data processing
+    # Transform data: Handle missing values, convert MTU to datetime
+    for col in mFRR_capacity_market_DK2.data.columns:
+        for col in mFRR_capacity_market_DK2.data.columns:
+            if col not in ["HourUTC"]:
+                mFRR_capacity_market_DK2.data[col] = pd.to_numeric(mFRR_capacity_market_DK2.data[col], errors='coerce')
+    mFRR_capacity_market_DK2.data["HourUTC"] = (
+        mFRR_capacity_market_DK2.data["HourUTC"]
+        .pipe(pd.to_datetime, format='%Y-%m-%d %H:%M:%S', utc=True)
+    )
+    mFRR_capacity_market_DK2.set_data(
+        mFRR_capacity_market_DK2.data[
+            mFRR_capacity_market_DK2.data["HourUTC"] <= pd.Timestamp("2025-09-22", tz="UTC")
+        ]
+    )
+
+    # Check for duplicate HourUTC values
+    datetime_duplicates = mFRR_capacity_market_DK2.data["HourUTC"].duplicated().sum()
+    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+
+    # Change column names to indicate DK2
+    for col in mFRR_capacity_market_DK2.data.columns:
+        if col != "HourUTC":
+            mFRR_capacity_market_DK2.data.rename(columns={col: f"{col}_DK2"}, inplace=True)
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        mFRR_capacity_market_DK2 = mFRR_capacity_market_DK2.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        mFRR_capacity_market_DK2.set_data(mFRR_capacity_market_DK2.data
+                                    .set_index("HourUTC").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        mFRR_capacity_market_DK2.set_data(mFRR_capacity_market_DK2.data.reset_index())
+
+        # Merge with features_df
+        features_df = features_df.merge(
+            mFRR_capacity_market_DK2.data, left_on='datetime',
+            right_on='HourUTC', how='left').drop(columns=['HourUTC'])
+    else:
+        print("⚠️  Warning: Duplicate HourUTC values found. "
+              "Please check the data for inconsistencies.")
+
+    print(mFRR_capacity_market_DK2.info())
+    del mFRR_capacity_market_DK2
+    print("Shape features: ", features_df.shape)
+
+    ###########################################################################
+
+    print("=" * 60)
+    print("Importing Data: ProductionConsumptionSettlement")
+    print("=" * 60)
+
+    # Import data and validate
+    actual_production_consumption = DataImporter("ProductionConsumptionSettlement.csv",
+                                 sep=';', decimal=',')
+    actual_production_consumption_DK1 = DataImporter()
+    actual_production_consumption_DK2 = DataImporter()
+
+    # Transform data: Drop 'HourDK' column, handle missing values, convert MTU to datetime
+    actual_production_consumption = actual_production_consumption.transform_data(
+        drop_columns=['HourDK'])
+    for col in actual_production_consumption.data.columns:
+        for col in actual_production_consumption.data.columns:
+            if col not in ["HourUTC", "PriceArea"]:
+                actual_production_consumption.data[col] = pd.to_numeric(actual_production_consumption.data[col], errors='coerce')
+    actual_production_consumption.data["HourUTC"] = (
+        actual_production_consumption.data["HourUTC"]
+        .pipe(pd.to_datetime, format='%Y-%m-%d %H:%M:%S', utc=True)
+    )
+    actual_production_consumption.set_data(
+        actual_production_consumption.data[
+            actual_production_consumption.data["HourUTC"] <= pd.Timestamp("2025-09-22", tz="UTC")
+        ]
+    )
+    
+    # Split data into DK1 and DK2
+    actual_production_consumption_DK1.set_data(
+        actual_production_consumption.data[actual_production_consumption.data["PriceArea"] == "DK1"]
+        .drop(columns=["PriceArea"])
+    )
+
+    actual_production_consumption_DK2.set_data(
+        actual_production_consumption.data[actual_production_consumption.data["PriceArea"] == "DK2"]
+        .drop(columns=["PriceArea"])
+    )
+
+    del actual_production_consumption
+
+    # DK1 data processing
+    # Check for duplicate HourUTC values
+    datetime_duplicates = actual_production_consumption_DK1.data["HourUTC"].duplicated().sum()
+    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+
+    # Change column names to indicate DK1
+    for col in actual_production_consumption_DK1.data.columns:
+        if col != "HourUTC":
+            actual_production_consumption_DK1.data.rename(columns={col: f"{col}_DK1"}, inplace=True)
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        actual_production_consumption_DK1 = actual_production_consumption_DK1.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        actual_production_consumption_DK1.set_data(actual_production_consumption_DK1.data
+                                    .set_index("HourUTC").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        actual_production_consumption_DK1.set_data(actual_production_consumption_DK1.data.reset_index())
+
+        # Merge with features_df
+        features_df = features_df.merge(
+            actual_production_consumption_DK1.data, left_on='datetime',
+            right_on='HourUTC', how='left').drop(columns=['HourUTC'])
+    else:
+        print("⚠️  Warning: Duplicate HourUTC values found. "
+              "Please check the data for inconsistencies.")
+
+    print(actual_production_consumption_DK1.info())
+    del actual_production_consumption_DK1
+
+    # DK2 data processing
+    # Check for duplicate HourUTC values
+    datetime_duplicates = actual_production_consumption_DK2.data["HourUTC"].duplicated().sum()
+    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+
+    # Change column names to indicate DK2
+    for col in actual_production_consumption_DK2.data.columns:
+        if col != "HourUTC":
+            actual_production_consumption_DK2.data.rename(columns={col: f"{col}_DK2"}, inplace=True)
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        actual_production_consumption_DK2 = actual_production_consumption_DK2.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        actual_production_consumption_DK2.set_data(actual_production_consumption_DK2.data
+                                    .set_index("HourUTC").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        actual_production_consumption_DK2.set_data(actual_production_consumption_DK2.data.reset_index())
+
+        # Merge with features_df
+        features_df = features_df.merge(
+            actual_production_consumption_DK2.data, left_on='datetime',
+            right_on='HourUTC', how='left').drop(columns=['HourUTC'])
+    else:
+        print("⚠️  Warning: Duplicate HourUTC values found. "
+              "Please check the data for inconsistencies.")
+
+    print(actual_production_consumption_DK2.info())
+    del actual_production_consumption_DK2
+    print("Shape features: ", features_df.shape)
+
+    ###########################################################################
+
+    print("=" * 60)
+    print("Importing Data: Total Load - Day Ahead _ Actual - DK1")
+    print("=" * 60)
+
+    # Import data and validate
+    load_data_DK1 = DataImporter()
+    
+    load_data_DK1_2023 = DataImporter(
+        'Total Load - Day Ahead _ Actual_2023 - DK1.csv')
+    load_data_DK1_2024 = DataImporter(
+        'Total Load - Day Ahead _ Actual_2024 - DK1.csv')
+    load_data_DK1_2025 = DataImporter(
+        'Total Load - Day Ahead _ Actual_2025 - DK1.csv')
+
+    load_data_DK1.set_data(
+        pd.concat([
+            load_data_DK1_2023.data,
+            load_data_DK1_2024.data,
+            load_data_DK1_2025.data
+        ], ignore_index=True)
+    )
+
+    del load_data_DK1_2023, load_data_DK1_2024, load_data_DK1_2025
+
+    # Transform data: Drop 'Area' column, handle missing values, convert MTU to datetime
+    for col in load_data_DK1.data.columns:
+        if col != "Time (UTC)":
+            load_data_DK1.data[col] = pd.to_numeric(load_data_DK1.data[col], errors='coerce')
+    load_data_DK1.data["Time (UTC)"] = (
+        load_data_DK1.data["Time (UTC)"]
+        .str.split(" - ").str[0].
+        pipe(pd.to_datetime, format='%d.%m.%Y %H:%M', utc=True)
+    )
+    load_data_DK1.set_data(
+        load_data_DK1.data[
+            load_data_DK1.data["Time (UTC)"] <= pd.Timestamp("2025-09-22", tz="UTC")
+        ]
+    )
+    # Check for duplicate Time (UTC) values
+    datetime_duplicates = load_data_DK1.data["Time (UTC)"].duplicated().sum()
+    print(f"Number of duplicate Time (UTC) values: {datetime_duplicates}")
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        load_data_DK1 = load_data_DK1.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        load_data_DK1.set_data(load_data_DK1.data
+                                       .set_index("Time (UTC)").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        load_data_DK1.set_data(load_data_DK1.data.reset_index())
+
+        # Merge with features_df 
+        features_df = features_df.merge(
+            load_data_DK1.data, left_on='datetime',
+            right_on='Time (UTC)', how='left').drop(columns=['Time (UTC)'])
+    else:
+        print("⚠️  Warning: Duplicate Time (UTC) values found. "
+              "Please check the data for inconsistencies.")
+
+    print(load_data_DK1.info())
+    del load_data_DK1
+
+    ###########################################################################
+
+    print("=" * 60)
+    print("Importing Data: Total Load - Day Ahead _ Actual - DK2")
+    print("=" * 60)
+
+    # Import data and validate
+    load_data_DK2 = DataImporter()
+
+    load_data_DK2_2023 = DataImporter(
+        'Total Load - Day Ahead _ Actual_2023 - DK2.csv')
+    load_data_DK2_2024 = DataImporter(
+        'Total Load - Day Ahead _ Actual_2024 - DK2.csv')
+    load_data_DK2_2025 = DataImporter(
+        'Total Load - Day Ahead _ Actual_2025 - DK2.csv')
+
+    load_data_DK2.set_data(
+        pd.concat([
+            load_data_DK2_2023.data,
+            load_data_DK2_2024.data,
+            load_data_DK2_2025.data
+        ], ignore_index=True)
+    )
+
+    del load_data_DK2_2023, load_data_DK2_2024, load_data_DK2_2025
+
+    # Transform data: Drop 'Area' column, handle missing values, convert MTU to datetime
+    for col in load_data_DK2.data.columns:
+        if col != "Time (UTC)":
+            load_data_DK2.data[col] = pd.to_numeric(load_data_DK2.data[col], errors='coerce')
+    load_data_DK2.data["Time (UTC)"] = (
+        load_data_DK2.data["Time (UTC)"]
+        .str.split(" - ").str[0].
+        pipe(pd.to_datetime, format='%d.%m.%Y %H:%M', utc=True)
+    )
+    load_data_DK2.set_data(
+        load_data_DK2.data[
+            load_data_DK2.data["Time (UTC)"] <= pd.Timestamp("2025-09-22", tz="UTC")
+        ]
+    )
+    # Check for duplicate Time (UTC) values
+    datetime_duplicates = load_data_DK2.data["Time (UTC)"].duplicated().sum()
+    print(f"Number of duplicate Time (UTC) values: {datetime_duplicates}")
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        load_data_DK2 = load_data_DK2.transform_data(
+        drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        load_data_DK2.set_data(load_data_DK2.data
+                                       .set_index("Time (UTC)").resample("h")
+                                       .sum(min_count=1))
+        # Reset index to a column
+        load_data_DK2.set_data(load_data_DK2.data.reset_index())
+
+        # Merge with features_df 
+        features_df = features_df.merge(
+            load_data_DK2.data, left_on='datetime',
+            right_on='Time (UTC)', how='left').drop(columns=['Time (UTC)'])
+    else:
+        print("⚠️  Warning: Duplicate Time (UTC) values found. "
+              "Please check the data for inconsistencies.")
+
+    print(load_data_DK2.info())
+    del load_data_DK2
+
+    print("Final shape features: ", features_df.shape)
