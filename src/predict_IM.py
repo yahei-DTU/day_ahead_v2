@@ -19,8 +19,7 @@ import numpy as np
 from typing import Dict, Any, Union, Optional
 import sys
 from sklearn.linear_model import LogisticRegression
-from data import DataImporter
-
+from data_handler import DataHandler
 
 class ImbalancePredictor:
     """
@@ -120,12 +119,17 @@ class BartPredictor(ImbalancePredictor):
     
 if __name__ == "__main__":
     # Example usage
+    print("A")
     model_params = {"C": 1.0, "max_iter": 100}
     predictor = LogisticRegressionPredictor(model_params)
     
     # Import features
-    imbalance_data = DataImporter("imbalance_data.parquet",
+    imbalance_data = DataHandler("imbalance_data.parquet",
                                   "../data/processed")
+    print("B")
+    imbalance_data.preview()
+
+    sys.exit()  # Temporary exit to avoid running incomplete code below
 
     # DK2 example
     features = imbalance_data.data

@@ -380,30 +380,6 @@ class DataHandler:
                 else:
                     print("✅ No missing values found")
                     print()
-            if report.column_completeness:
-                print("✅ Column Completeness:")
-                print("-" * 50)
-                for col, pct in report.column_completeness.items():
-                    print(f"   {col}: {pct}% complete")
-                
-        else:
-            # For text data
-            print("📄 Text Data Preview:")
-            print("-" * 50)
-            text_preview = str(self._data)
-            lines = text_preview.split('\n')
-            
-            # Show first few lines
-            preview_lines = min(n_rows * 2, len(lines))
-            for i, line in enumerate(lines[:preview_lines]):
-                print(f"{i+1:3d}: {line}")
-            
-            if len(lines) > preview_lines:
-                print(f"... ({len(lines) - preview_lines} more lines)")
-
-            print()
-            print(f"📊 Total: {len(text_preview)} characters, "
-                  f"{len(lines)} lines")
 
         print("=" * 70)
 
@@ -811,10 +787,6 @@ class OpenMeteoData(DataHandler):
         """
         return self._data
 
-
-data_example = DataHandler('ImbalancePrice.csv',sep=';',decimal=",")
-data_example.validate_data(print_report=True)
-sys.exit()
 
 if __name__ == "__main__":
     # Create an empty DataFrame with hourly datetime index
