@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-File name: data.py
+File name: data_handler.py
 Author: Yannick Heiser
 Created: 2025-09-19
 Version: 1.0
@@ -9,21 +9,22 @@ Description:
     This script reads in data
 
 Contact: yahei@dtu.dk
-Dependencies: pandas, os, typing, sys
+Dependencies: pandas, os, typing, pathlib, data_validation
 """
 
 import os
-import pandas as pd
-from typing import Dict, Any, Union, Optional
-import sys
 from pathlib import Path
-from data_validation import (
+from typing import Dict, Any, Union, Optional
+import pandas as pd
+
+import openmeteo_requests
+import requests_cache
+from retry_requests import retry
+from src.data_validation import (
     ValidationReport, ShapeInfo, MissingValuesInfo,
     MissingColumnInfo, DuplicateInfo, MemoryUsageInfo,
     NumericSummaryStats
 )
-
-
 
 
 class DataHandler:
@@ -47,11 +48,11 @@ class DataHandler:
         
         Args:
             filename (Optional[str]): The name of the file to import.
-            filepath (Optional[str]): The path to the directory containing the file. If None, defaults to '../data/raw'.
+            filepath (Optional[str]): The path to the directory containing the file from repo directory. If None, defaults to 'data/raw'.
             **kwargs: Additional arguments to pass to pandas read functions.
         """
         self.filename: Optional[str] = filename
-        self.filepath: Optional[str] = filepath or '../data/raw'
+        self.filepath: Optional[str] = filepath or 'data/raw'
         self.arguments: Dict[str, Any] = kwargs
         if self.filename is not None:
             self._data = self._load_data()
@@ -62,7 +63,7 @@ class DataHandler:
     def data(self) -> Union[pd.DataFrame]:
         """
         Access the loaded data.
-        
+
         Returns:
             Union[pd.DataFrame]: The loaded data as a pandas DataFrame for
             supported formats, or an empty DataFrame if no file was loaded.
@@ -84,11 +85,9 @@ class DataHandler:
         """
         if self.filename is None:
             raise ValueError("No filename provided. Cannot load data.")
-
-        data_path = Path(self.filepath) / self.filename
+        data_path = Path(self.filepath or '') / self.filename
         if not data_path.is_absolute():
-            data_path = Path(__file__).resolve().parent / data_path
-
+            data_path = Path(__file__).resolve().parent.parent / data_path
         print(f"Loading data from: {data_path}")
 
         # Check if file exists
@@ -624,119 +623,85 @@ class DataHandler:
             str: Path to the saved file.
             
         Raises:
-            ValueError: If trying to save non-DataFrame data in
-                DataFrame formats, or if no data is loaded.
-            OSError: If the directory doesn't exist or can't be created.
+            ValueError: If no data is loaded to save.
+            IOError: If saving the file fails.
         """
         if self._data is None:
             raise ValueError("No data to save. Load data first.")
 
-        # Infer format from filename extension if not provided
-        if filename is not None:
-            ext = os.path.splitext(filename)[1].lower()
-        else:
-            ext = os.path.splitext(self.filename)[1].lower()
+        # Map extensions to formats
+        ext_map = {
+            ".csv": "csv",
+            ".parquet": "parquet",
+            ".xlsx": "excel",
+            ".xls": "excel",
+            ".json": "json",
+        }
 
-        if ext in ['.csv']:
-            format = 'csv'
-        elif ext in ['.parquet']:
-            format = 'parquet'
-        elif ext in ['.xlsx', '.xls', '.excel']:
-            format = 'excel'
-        elif ext in ['.json']:
-            format = 'json'
-        else:
-            format = 'txt'
-        
-        # Determine output directory
+        # Determine extension & format
+        candidate = Path(filename) if filename else Path(
+            self.filename or "_.csv")
+        ext = candidate.suffix.lower()
+        fmt = ext_map.get(ext, "txt")
+
+        # Resolve save directory
         if directory is None:
-            directory = os.path.join(os.path.dirname(__file__), '../data')
-        
-        # Create directory if it doesn't exist
-        os.makedirs(directory, exist_ok=True)
-        
-        # Generate filename if not provided
+            save_path = Path(self.filepath).parent if self.filepath else Path(
+                "data")
+        else:
+            save_path = Path(directory)
+
+        if not save_path.is_absolute():
+            save_path = Path(__file__).resolve().parent.parent / save_path
+
+        save_path.mkdir(parents=True, exist_ok=True)
+
+        # Construct final output path
         if filename is None:
-            base_name = os.path.splitext(self.filename)[0]
-            filename = f"{base_name}_saved.{format}"
-        elif not filename.endswith(f'.{format}'):
-            filename = f"{filename}.{format}"
-        
-        # Full path for the output file
-        output_path = os.path.join(directory, filename)
-        
+            base = candidate.stem
+            output_path = (
+                save_path / f"{base}_saved.{fmt if fmt != 'excel' else 'xlsx'}"
+                )
+        else:
+            output_path = save_path / candidate
+            if fmt == "excel":
+                output_path = output_path.with_suffix(".xlsx")
+
         try:
             if isinstance(self._data, pd.DataFrame):
-                if format == 'csv':
-                    # Default CSV settings
-                    csv_kwargs = {'index': False}
-                    csv_kwargs.update(kwargs)
-                    self._data.to_csv(output_path, **csv_kwargs)
-                    
-                elif format == 'parquet':
-                    # Default Parquet settings
-                    parquet_kwargs = {'index': False}
-                    parquet_kwargs.update(kwargs)
-                    self._data.to_parquet(output_path, **parquet_kwargs)
-                    
-                elif format in ['excel', 'xlsx']:
-                    # Default Excel settings
-                    excel_kwargs = {'index': False}
-                    excel_kwargs.update(kwargs)
-                    if not output_path.endswith('.xlsx'):
-                        output_path = output_path.replace('.excel', '.xlsx')
-                    self._data.to_excel(output_path, **excel_kwargs)
-                    
-                elif format == 'json':
-                    # Default JSON settings
-                    json_kwargs = {'orient': 'records', 'indent': 2}
-                    json_kwargs.update(kwargs)
-                    self._data.to_json(output_path, **json_kwargs)
-                    
+                if fmt == "csv":
+                    self._data.to_csv(output_path, index=False, **kwargs)
+                elif fmt == "parquet":
+                    self._data.to_parquet(output_path, index=False, **kwargs)
+                elif fmt == "excel":
+                    self._data.to_excel(output_path, index=False, **kwargs)
+                elif fmt == "json":
+                    self._data.to_json(output_path, orient="records",
+                                       indent=2, **kwargs)
                 else:
-                    raise ValueError(  
-                        f"Unsupported format: {format}. "
-                        "Supported formats: csv, parquet, excel, json"
-                    )
+                    raise ValueError(f"Unsupported format: {fmt}")
             else:
-                # Save text data
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    f.write(str(self._data))
-            
-            # Print success message
-            if isinstance(self._data, pd.DataFrame):
-                rows, cols = self._data.shape
-                print(f"💾 Successfully saved {rows} rows × {cols} columns")
-            else:
-                char_count = len(str(self._data))
-                print(f"💾 Successfully saved {char_count} characters")
-            
-            print(f"📁 File saved as: {output_path}")
+                output_path.write_text(str(self._data), encoding="utf-8")
+
             return output_path
-            
+
         except Exception as e:
-            print(f"❌ Error saving file: {str(e)}")
+            print(f"❌ Error saving data: {str(e)}")
             raise
 
-class OpenMeteoData(DataHandler):
+
+class OpenMeteoHandler(DataHandler):
     """
 
     A class to import historical forecast data from OpenMeteo API.
 
     Attributes:
         parameters (Dict[str, Any]): Parameters for the API request.
-        api_url (str): The base URL for the OpenMeteo API.
     """
     def __init__(self, **params: Any):
         # Only import if not already loaded
-        if "openmeteo_requests" not in sys.modules:
-            import openmeteo_requests
-        if "requests_cache" not in sys.modules:
-            import requests_cache
-        if "retry_requests" not in sys.modules:
-            from retry_requests import retry
+        super().__init__(filename=None)
         self.parameters: Dict[str, Any] = params
-        self.api_url: str = "https://historical-forecast-api.open-meteo.com/v1/forecast"
         self._data: pd.DataFrame = self._fetch_data()
 
     def _fetch_data(self) -> pd.DataFrame:
@@ -745,47 +710,47 @@ class OpenMeteoData(DataHandler):
 
         Returns:
             pd.DataFrame: Data fetched from the API.
+
+        Raises:
+            Exception: If the API request fails.
+            ValueError: If no 'hourly' variables are specified in parameters.
         """
         # Setup the Open-Meteo API client with cache and retry on error
-        cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
+        cache_session = requests_cache.CachedSession('.cache',
+                                                     expire_after=3600)
         retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
         openmeteo = openmeteo_requests.Client(session=retry_session)
+
+        api_url = "https://historical-forecast-api.open-meteo.com/v1/forecast"
         try:
-            responses = openmeteo.weather_api(self.api_url, params=self.parameters)
+            print("Fetching data from OpenMeteo API...")
+            responses = openmeteo.weather_api(api_url,
+                                              params=self.parameters)
         except Exception as e:
             print(f"❌ Error fetching data from OpenMeteo API: {str(e)}")
-            raise
-        if "bounding_box" in self.parameters:
-            # Process bounding box locations
-            for response in responses:
-                print(f"\nCoordinates: {response.Latitude()}°N {response.Longitude()}°E")
-                print(f"Elevation: {response.Elevation()} m asl")
-                print(f"Timezone difference to GMT+0: {response.UtcOffsetSeconds()}s")
-                
-                # Process hourly data. The order of variables needs to be the same as requested.
-                hourly = response.Hourly()
-                hourly_temperature_2m = hourly.Variables(0).ValuesAsNumpy()
-                
-                hourly_data = {"date": pd.date_range(
-                    start = pd.to_datetime(hourly.Time(), unit = "s", utc = True),
-                    end = pd.to_datetime(hourly.TimeEnd(), unit = "s", utc = True),
-                    freq = pd.Timedelta(seconds = hourly.Interval()),
-                    inclusive = "left"
-                )}
-                hourly_data["temperature_2m"] = hourly_temperature_2m
-        else:
-            pass
-        return pd.DataFrame(data = hourly_data)
+            raise            # Process bounding box locations
+        try:
+            variables = self.parameters.get("hourly", [])
+            print(f"Requested variables: {variables}")
+        except:
+            raise ValueError("No 'hourly' variables specified in parameters.")
+        for response in responses:
+            print(f"\nCoordinates: {response.Latitude()}°N {response.Longitude()}°E")
+            print(f"Elevation: {response.Elevation()} m asl")
+            print(f"Timezone difference to GMT+0: {response.UtcOffsetSeconds()}s")
 
-    @property
-    def data(self) -> pd.DataFrame:
-        """
-        Access the loaded data.
-
-        Returns:
-            pd.DataFrame: The loaded data as a pandas DataFrame.
-        """
-        return self._data
+            # Process hourly data. The order of variables needs to be the same as requested.
+            hourly = response.Hourly()
+            hourly_data = {"date": pd.date_range(
+                start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
+                end=pd.to_datetime(hourly.TimeEnd(), unit="s", utc=True),
+                freq=pd.Timedelta(seconds=hourly.Interval()),
+                inclusive="left"
+            )}
+            for i, var_name in enumerate(variables):
+                var = hourly.Variables(i).ValuesAsNumpy()
+                hourly_data[var_name] = var
+        return pd.DataFrame(data=hourly_data)
 
 
 if __name__ == "__main__":
@@ -819,15 +784,19 @@ if __name__ == "__main__":
         ], ignore_index=True)
     )
 
-    del actual_production_2023_DK1, actual_production_2024_DK1, actual_production_2025_DK1
+    del (actual_production_2023_DK1,
+         actual_production_2024_DK1,
+         actual_production_2025_DK1)
 
-    # Transform data: Drop 'Area' column, handle missing values, convert MTU to datetime
+    # Transform data: Drop 'Area' column, handle missing values,
     actual_production_DK1 = actual_production_DK1.transform_data(
         drop_columns=['Area'])
     for col in actual_production_DK1.data.columns:
         if col != "MTU":
-            actual_production_DK1.data[col] = pd.to_numeric(actual_production_DK1.data[col], errors='coerce')
-            actual_production_DK1.data.rename(columns={col: f"{col}_DK1"}, inplace=True)
+            actual_production_DK1.data[col] = pd.to_numeric(
+                actual_production_DK1.data[col], errors='coerce')
+            actual_production_DK1.data.rename(columns={col: f"{col}_DK1"},
+                                              inplace=True)
     actual_production_DK1.data["MTU"] = (
         actual_production_DK1.data["MTU"]
         .replace(" (UTC)", "", regex=False).str.split(" - ").str[0].
@@ -835,9 +804,11 @@ if __name__ == "__main__":
     )
     actual_production_DK1.set_data(
         actual_production_DK1.data[
-            actual_production_DK1.data["MTU"] <= pd.Timestamp("2025-09-22", tz="UTC")
+            actual_production_DK1.data["MTU"] <= pd.Timestamp("2025-09-22",
+                                                              tz="UTC")
         ]
     )
+
     # Check for duplicate MTU values
     datetime_duplicates = actual_production_DK1.data["MTU"].duplicated().sum()
     print(f"Number of duplicate MTU values: {datetime_duplicates}")
@@ -845,14 +816,20 @@ if __name__ == "__main__":
     if datetime_duplicates == 0:
         # Drop columns with more than 20% missing values
         actual_production_DK1 = actual_production_DK1.transform_data(
-        drop_missing_threshold=0.1)
+            drop_missing_threshold=0.1)
 
         # Resample to hourly frequency, summing values within each hour
         actual_production_DK1.set_data(actual_production_DK1.data
                                        .set_index("MTU").resample("h")
                                        .sum(min_count=1))
+
+        # Create lagged features (48 hours)
+        actual_production_DK1.set_data(actual_production_DK1.data.shift(48))
+        actual_production_DK1.data.columns = [f"{col}_Lag48h" for col in actual_production_DK1.data.columns]
+
         # Reset index to a column
-        actual_production_DK1.set_data(actual_production_DK1.data.reset_index())
+        actual_production_DK1.set_data(actual_production_DK1.
+                                       data.reset_index())
 
         # Merge with features_df
         features_df = features_df.merge(
@@ -862,7 +839,7 @@ if __name__ == "__main__":
         print("⚠️  Warning: Duplicate MTU values found. "
               "Please check the data for inconsistencies.")
 
-    print(actual_production_DK1.info())
+    actual_production_DK1.info()
     del actual_production_DK1
 
     ###########################################################################
@@ -889,15 +866,19 @@ if __name__ == "__main__":
         ], ignore_index=True)
     )
 
-    del actual_production_2023_DK2, actual_production_2024_DK2, actual_production_2025_DK2
+    del (actual_production_2023_DK2,
+         actual_production_2024_DK2,
+         actual_production_2025_DK2)
 
-    # Transform data: Drop 'Area' column, handle missing values, convert MTU to datetime
+    # Transform data: Drop 'Area' column, handle missing values
     actual_production_DK2 = actual_production_DK2.transform_data(
         drop_columns=['Area'])
     for col in actual_production_DK2.data.columns:
         if col != "MTU":
-            actual_production_DK2.data[col] = pd.to_numeric(actual_production_DK2.data[col], errors='coerce')
-            actual_production_DK2.data.rename(columns={col: f"{col}_DK2"}, inplace=True)
+            actual_production_DK2.data[col] = pd.to_numeric(
+                actual_production_DK2.data[col], errors='coerce')
+            actual_production_DK2.data.rename(columns={col: f"{col}_DK2"},
+                                              inplace=True)
     actual_production_DK2.data["MTU"] = (
         actual_production_DK2.data["MTU"]
         .replace(" (UTC)", "", regex=False).str.split(" - ").str[0].
@@ -921,6 +902,12 @@ if __name__ == "__main__":
         actual_production_DK2.set_data(actual_production_DK2.data
                                        .set_index("MTU").resample("h")
                                        .sum(min_count=1))
+        
+        # Create lagged features (48 hours)
+        actual_production_DK2.set_data(actual_production_DK2.data.shift(48))
+        actual_production_DK2.data.columns = [f"{col}_Lag48h" for col in actual_production_DK2.data.columns]
+
+
         # Reset index to a column
         actual_production_DK2.set_data(actual_production_DK2.data.reset_index())
 
@@ -932,7 +919,7 @@ if __name__ == "__main__":
         print("⚠️  Warning: Duplicate MTU values found. "
               "Please check the data for inconsistencies.")
 
-    print(actual_production_DK2.info())
+    actual_production_DK2.info()
     del actual_production_DK2
     print("Shape features: ", features_df.shape)
 
@@ -947,13 +934,16 @@ if __name__ == "__main__":
     afrr_reserves_DK1 = DataHandler()
     afrr_reserves_DK2 = DataHandler()
     
-    # Transform data: Drop 'HourDK' column, handle missing values, convert MTU to datetime
+    # Transform data: Drop 'HourDK' column, handle missing values
     afrr_reserves = afrr_reserves.transform_data(
-        drop_columns=['HourDK'])
+        drop_columns=['HourDK',
+                      'aFRR_DownCapPriceDKK',
+                      'aFRR_UpCapPriceDKK'])
     for col in afrr_reserves.data.columns:
         for col in afrr_reserves.data.columns:
             if col not in ["HourUTC", "PriceArea"]:
-                afrr_reserves.data[col] = pd.to_numeric(afrr_reserves.data[col], errors='coerce')
+                afrr_reserves.data[col] = pd.to_numeric(afrr_reserves.data[col],
+                                                        errors='coerce')
     afrr_reserves.data["HourUTC"] = (
         afrr_reserves.data["HourUTC"]
         .pipe(pd.to_datetime, format='%Y-%m-%d %H:%M:%S', utc=True)
@@ -980,22 +970,25 @@ if __name__ == "__main__":
     # DK1 data processing
     # Check for duplicate HourUTC values
     datetime_duplicates = afrr_reserves_DK1.data["HourUTC"].duplicated().sum()
-    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+    if datetime_duplicates > 0:
+        raise ValueError(
+            f"Duplicate HourUTC values found: {datetime_duplicates}")
 
     # Change column names to indicate DK1
     for col in afrr_reserves_DK1.data.columns:
         if col != "HourUTC":
-            afrr_reserves_DK1.data.rename(columns={col: f"{col}_DK1"}, inplace=True)
+            afrr_reserves_DK1.data.rename(columns={col: f"{col}_DK1"},
+                                          inplace=True)
 
     if datetime_duplicates == 0:
         # Drop columns with more than 20% missing values
         afrr_reserves_DK1 = afrr_reserves_DK1.transform_data(
-        drop_missing_threshold=0.1)
+            drop_missing_threshold=0.1)
 
         # Resample to hourly frequency, summing values within each hour
         afrr_reserves_DK1.set_data(afrr_reserves_DK1.data
-                                    .set_index("HourUTC").resample("h")
-                                       .sum(min_count=1))
+                                   .set_index("HourUTC").resample("h")
+                                   .sum(min_count=1))
         # Reset index to a column
         afrr_reserves_DK1.set_data(afrr_reserves_DK1.data.reset_index())
 
@@ -1007,13 +1000,13 @@ if __name__ == "__main__":
         print("⚠️  Warning: Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
-    print(afrr_reserves_DK1.info())
     del afrr_reserves_DK1
 
     # DK2 data processing
     # Check for duplicate HourUTC values
     datetime_duplicates = afrr_reserves_DK2.data["HourUTC"].duplicated().sum()
-    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+    if datetime_duplicates > 0:
+        raise ValueError(f"Duplicate HourUTC values found: {datetime_duplicates}")
 
     # Change column names to indicate DK2
     for col in afrr_reserves_DK2.data.columns:
@@ -1023,12 +1016,12 @@ if __name__ == "__main__":
     if datetime_duplicates == 0:
         # Drop columns with more than 20% missing values
         afrr_reserves_DK2 = afrr_reserves_DK2.transform_data(
-        drop_missing_threshold=0.1)
+            drop_missing_threshold=0.1)
 
         # Resample to hourly frequency, summing values within each hour
         afrr_reserves_DK2.set_data(afrr_reserves_DK2.data
-                                    .set_index("HourUTC").resample("h")
-                                       .sum(min_count=1))
+                                   .set_index("HourUTC").resample("h")
+                                   .sum(min_count=1))
         # Reset index to a column
         afrr_reserves_DK2.set_data(afrr_reserves_DK2.data.reset_index())
 
@@ -1040,7 +1033,7 @@ if __name__ == "__main__":
         print("⚠️  Warning: Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
-    print(afrr_reserves_DK2.info())
+    afrr_reserves_DK2.info()
     del afrr_reserves_DK2
     print("Shape features: ", features_df.shape)
 
@@ -1052,7 +1045,7 @@ if __name__ == "__main__":
 
     # Import data and validate
     forecasted_transfer_capacities_DK1_DE_LU = DataHandler()
-    
+
     forecasted_transfer_capacities_DK1_DE_LU_2023 = DataHandler(
         'Forecasted Transfer Capacities - Day Ahead_2023 - DK1 to DE-LU.csv')
     forecasted_transfer_capacities_DK1_DE_LU_2024 = DataHandler(
@@ -1079,7 +1072,10 @@ if __name__ == "__main__":
     )
     for col in forecasted_transfer_capacities_DK1_DE_LU.data.columns:
         if col != "Time (UTC)":
-            forecasted_transfer_capacities_DK1_DE_LU.data[col] = pd.to_numeric(forecasted_transfer_capacities_DK1_DE_LU.data[col], errors='coerce')
+            forecasted_transfer_capacities_DK1_DE_LU.data[col] = (
+                pd.to_numeric(forecasted_transfer_capacities_DK1_DE_LU
+                              .data[col], errors='coerce')
+            )
     forecasted_transfer_capacities_DK1_DE_LU.data["Time (UTC)"] = (
         forecasted_transfer_capacities_DK1_DE_LU.data["Time (UTC)"]
         .str.split(" - ").str[0].
@@ -1087,26 +1083,31 @@ if __name__ == "__main__":
     )
     forecasted_transfer_capacities_DK1_DE_LU.set_data(
         forecasted_transfer_capacities_DK1_DE_LU.data[
-            forecasted_transfer_capacities_DK1_DE_LU.data["Time (UTC)"] <= pd.Timestamp("2025-09-22", tz="UTC")
+            forecasted_transfer_capacities_DK1_DE_LU.data["Time (UTC)"] <= (
+                pd.Timestamp("2025-09-22", tz="UTC"))
         ]
     )
     # Check for duplicate Time (UTC) values
-    datetime_duplicates = forecasted_transfer_capacities_DK1_DE_LU.data["Time (UTC)"].duplicated().sum()
+    datetime_duplicates = (forecasted_transfer_capacities_DK1_DE_LU.
+                           data["Time (UTC)"].duplicated().sum())
     print(f"Number of duplicate Time (UTC) values: {datetime_duplicates}")
 
     if datetime_duplicates == 0:
         # Drop columns with more than 20% missing values
-        forecasted_transfer_capacities_DK1_DE_LU = forecasted_transfer_capacities_DK1_DE_LU.transform_data(
-        drop_missing_threshold=0.1)
+        forecasted_transfer_capacities_DK1_DE_LU = (
+            forecasted_transfer_capacities_DK1_DE_LU
+            .transform_data(drop_missing_threshold=0.1)
+        )
 
         # Resample to hourly frequency, summing values within each hour
-        forecasted_transfer_capacities_DK1_DE_LU.set_data(forecasted_transfer_capacities_DK1_DE_LU.data
-                                       .set_index("Time (UTC)").resample("h")
-                                       .sum(min_count=1))
+        forecasted_transfer_capacities_DK1_DE_LU.set_data(
+            forecasted_transfer_capacities_DK1_DE_LU
+            .data.set_index("Time (UTC)").resample("h").sum(min_count=1))
         # Reset index to a column
-        forecasted_transfer_capacities_DK1_DE_LU.set_data(forecasted_transfer_capacities_DK1_DE_LU.data.reset_index())
+        forecasted_transfer_capacities_DK1_DE_LU.set_data(
+            forecasted_transfer_capacities_DK1_DE_LU.data.reset_index())
 
-        # Merge with features_df 
+        # Merge with features_df
         features_df = features_df.merge(
             forecasted_transfer_capacities_DK1_DE_LU.data, left_on='datetime',
             right_on='Time (UTC)', how='left').drop(columns=['Time (UTC)'])
@@ -1114,7 +1115,8 @@ if __name__ == "__main__":
         print("⚠️  Warning: Duplicate Time (UTC) values found. "
               "Please check the data for inconsistencies.")
 
-    print(forecasted_transfer_capacities_DK1_DE_LU.info())
+    forecasted_transfer_capacities_DK1_DE_LU.info()
+
     del forecasted_transfer_capacities_DK1_DE_LU
     print("Shape features: ", features_df.shape)
 
@@ -1142,14 +1144,22 @@ if __name__ == "__main__":
         ], ignore_index=True)
     )
 
-    del forecasted_transfer_capacities_DK1_NL_2023, forecasted_transfer_capacities_DK1_NL_2024, forecasted_transfer_capacities_DK1_NL_2025
+    del (forecasted_transfer_capacities_DK1_NL_2023,
+         forecasted_transfer_capacities_DK1_NL_2024,
+         forecasted_transfer_capacities_DK1_NL_2025)
 
-    # Transform data: Drop 'Area' column, handle missing values, convert MTU to datetime
-    forecasted_transfer_capacities_DK1_NL = forecasted_transfer_capacities_DK1_NL.transform_data(
-        drop_columns=['Area'])
+    # Transform data: Drop 'Area' column, handle missing values
+    forecasted_transfer_capacities_DK1_NL = (
+        forecasted_transfer_capacities_DK1_NL.transform_data(
+            drop_columns=['Area']
+        )
+    )
     for col in forecasted_transfer_capacities_DK1_NL.data.columns:
         if col != "Time (UTC)":
-            forecasted_transfer_capacities_DK1_NL.data[col] = pd.to_numeric(forecasted_transfer_capacities_DK1_NL.data[col], errors='coerce')
+            forecasted_transfer_capacities_DK1_NL.data[col] = pd.to_numeric(
+                forecasted_transfer_capacities_DK1_NL.data[col],
+                errors='coerce'
+            )
     forecasted_transfer_capacities_DK1_NL.data["Time (UTC)"] = (
         forecasted_transfer_capacities_DK1_NL.data["Time (UTC)"]
         .str.split(" - ").str[0].
@@ -1157,17 +1167,22 @@ if __name__ == "__main__":
     )
     forecasted_transfer_capacities_DK1_NL.set_data(
         forecasted_transfer_capacities_DK1_NL.data[
-            forecasted_transfer_capacities_DK1_NL.data["Time (UTC)"] <= pd.Timestamp("2025-09-22", tz="UTC")
+            forecasted_transfer_capacities_DK1_NL.data["Time (UTC)"] <= (
+                pd.Timestamp("2025-09-22", tz="UTC"))
         ]
     )
     # Check for duplicate Time (UTC) values
-    datetime_duplicates = forecasted_transfer_capacities_DK1_NL.data["Time (UTC)"].duplicated().sum()
+    datetime_duplicates = (forecasted_transfer_capacities_DK1_NL
+                           .data["Time (UTC)"].duplicated().sum())
     print(f"Number of duplicate Time (UTC) values: {datetime_duplicates}")
 
     if datetime_duplicates == 0:
         # Drop columns with more than 20% missing values
-        forecasted_transfer_capacities_DK1_NL = forecasted_transfer_capacities_DK1_NL.transform_data(
-        drop_missing_threshold=0.1)
+        forecasted_transfer_capacities_DK1_NL = (
+            forecasted_transfer_capacities_DK1_NL.transform_data(
+                drop_missing_threshold=0.1
+            )
+        )
 
         # Resample to hourly frequency, summing values within each hour
         forecasted_transfer_capacities_DK1_NL.set_data(forecasted_transfer_capacities_DK1_NL.data
@@ -1261,7 +1276,8 @@ if __name__ == "__main__":
     # DK1 onshore wind data processing
     # Check for duplicate HourUTC values
     datetime_duplicates = forecast_production_DK1_onshore.data["HourUTC"].duplicated().sum()
-    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+    if datetime_duplicates > 0:
+        raise ValueError(f"Duplicate HourUTC values found: {datetime_duplicates}")
 
     # Change column names to indicate DK1
     for col in forecast_production_DK1_onshore.data.columns:
@@ -1295,7 +1311,8 @@ if __name__ == "__main__":
     # DK1 offshore wind data processing
     # Check for duplicate HourUTC values
     datetime_duplicates = forecast_production_DK1_offshore.data["HourUTC"].duplicated().sum()
-    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+    if datetime_duplicates > 0:
+        raise ValueError(f"Duplicate HourUTC values found: {datetime_duplicates}")
 
     # Change column names to indicate DK1
     for col in forecast_production_DK1_offshore.data.columns:
@@ -1328,7 +1345,8 @@ if __name__ == "__main__":
     # DK1 solar data processing
     # Check for duplicate HourUTC values
     datetime_duplicates = forecast_production_DK1_solar.data["HourUTC"].duplicated().sum()
-    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+    if datetime_duplicates > 0:
+        raise ValueError(f"Duplicate HourUTC values found: {datetime_duplicates}")
 
     # Change column names to indicate DK1
     for col in forecast_production_DK1_solar.data.columns:
@@ -1355,13 +1373,14 @@ if __name__ == "__main__":
         print("⚠️  Warning: Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
-    print(forecast_production_DK1_solar.info())
+    forecast_production_DK1_solar.info()
     del forecast_production_DK1_solar
 
     # DK2 onshore wind data processing
     # Check for duplicate HourUTC values
     datetime_duplicates = forecast_production_DK2_onshore.data["HourUTC"].duplicated().sum()
-    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+    if datetime_duplicates > 0:
+        raise ValueError(f"Duplicate HourUTC values found: {datetime_duplicates}")
 
     # Change column names to indicate DK2
     for col in forecast_production_DK2_onshore.data.columns:
@@ -1394,7 +1413,8 @@ if __name__ == "__main__":
     # DK2 offshore wind data processing
     # Check for duplicate HourUTC values
     datetime_duplicates = forecast_production_DK2_offshore.data["HourUTC"].duplicated().sum()
-    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+    if datetime_duplicates > 0:
+        raise ValueError(f"Duplicate HourUTC values found: {datetime_duplicates}")
 
     # Change column names to indicate DK2
     for col in forecast_production_DK2_offshore.data.columns:
@@ -1427,7 +1447,8 @@ if __name__ == "__main__":
     # DK2 solar data processing
     # Check for duplicate HourUTC values
     datetime_duplicates = forecast_production_DK2_solar.data["HourUTC"].duplicated().sum()
-    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+    if datetime_duplicates > 0:
+        raise ValueError(f"Duplicate HourUTC values found: {datetime_duplicates}")
 
     # Change column names to indicate DK2
     for col in forecast_production_DK2_solar.data.columns:
@@ -1805,9 +1826,8 @@ if __name__ == "__main__":
     # DK1 data processing
     # Transform data: Handle missing values, convert MTU to datetime
     for col in mFRR_capacity_market_DK1.data.columns:
-        for col in mFRR_capacity_market_DK1.data.columns:
-            if col not in ["HourUTC"]:
-                mFRR_capacity_market_DK1.data[col] = pd.to_numeric(mFRR_capacity_market_DK1.data[col], errors='coerce')
+        if col not in ["HourUTC"]:
+            mFRR_capacity_market_DK1.data[col] = pd.to_numeric(mFRR_capacity_market_DK1.data[col], errors='coerce')
     mFRR_capacity_market_DK1.data["HourUTC"] = (
         mFRR_capacity_market_DK1.data["HourUTC"]
         .pipe(pd.to_datetime, format='%Y-%m-%d %H:%M:%S', utc=True)
@@ -1820,7 +1840,8 @@ if __name__ == "__main__":
 
     # Check for duplicate HourUTC values
     datetime_duplicates = mFRR_capacity_market_DK1.data["HourUTC"].duplicated().sum()
-    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+    if datetime_duplicates > 0:
+        raise ValueError(f"Duplicate HourUTC values found: {datetime_duplicates}")
 
     # Change column names to indicate DK1
     for col in mFRR_capacity_market_DK1.data.columns:
@@ -1868,7 +1889,8 @@ if __name__ == "__main__":
 
     # Check for duplicate HourUTC values
     datetime_duplicates = mFRR_capacity_market_DK2.data["HourUTC"].duplicated().sum()
-    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+    if datetime_duplicates > 0:
+        raise ValueError(f"Duplicate HourUTC values found: {datetime_duplicates}")
 
     # Change column names to indicate DK2
     for col in mFRR_capacity_market_DK2.data.columns:
@@ -1944,7 +1966,8 @@ if __name__ == "__main__":
     # DK1 data processing
     # Check for duplicate HourUTC values
     datetime_duplicates = actual_production_consumption_DK1.data["HourUTC"].duplicated().sum()
-    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+    if datetime_duplicates > 0:
+        raise ValueError(f"Duplicate HourUTC values found: {datetime_duplicates}")
 
     # Change column names to indicate DK1
     for col in actual_production_consumption_DK1.data.columns:
@@ -1958,10 +1981,17 @@ if __name__ == "__main__":
 
         # Resample to hourly frequency, summing values within each hour
         actual_production_consumption_DK1.set_data(actual_production_consumption_DK1.data
-                                    .set_index("HourUTC").resample("h")
-                                       .sum(min_count=1))
+                                                   .set_index("HourUTC").resample("h")
+                                                   .sum(min_count=1))
+        
+        # Create lagged features (48 hours)
+        actual_production_consumption_DK1.set_data(actual_production_consumption_DK1.data.shift(48))
+        actual_production_consumption_DK1.data.columns = [f"{col}_Lag48h" for col in actual_production_consumption_DK1.data.columns]
+
         # Reset index to a column
-        actual_production_consumption_DK1.set_data(actual_production_consumption_DK1.data.reset_index())
+        actual_production_consumption_DK1.set_data(
+            actual_production_consumption_DK1.data.reset_index()
+            )
 
         # Merge with features_df
         features_df = features_df.merge(
@@ -1977,7 +2007,8 @@ if __name__ == "__main__":
     # DK2 data processing
     # Check for duplicate HourUTC values
     datetime_duplicates = actual_production_consumption_DK2.data["HourUTC"].duplicated().sum()
-    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+    if datetime_duplicates > 0:
+        raise ValueError(f"Duplicate HourUTC values found: {datetime_duplicates}")
 
     # Change column names to indicate DK2
     for col in actual_production_consumption_DK2.data.columns:
@@ -1993,6 +2024,11 @@ if __name__ == "__main__":
         actual_production_consumption_DK2.set_data(actual_production_consumption_DK2.data
                                     .set_index("HourUTC").resample("h")
                                        .sum(min_count=1))
+
+        # Create lagged features (48 hours)
+        actual_production_consumption_DK2.set_data(actual_production_consumption_DK2.data.shift(48))
+        actual_production_consumption_DK2.data.columns = [f"{col}_Lag48h" for col in actual_production_consumption_DK2.data.columns]
+
         # Reset index to a column
         actual_production_consumption_DK2.set_data(actual_production_consumption_DK2.data.reset_index())
 
@@ -2034,10 +2070,11 @@ if __name__ == "__main__":
 
     del load_data_DK1_2023, load_data_DK1_2024, load_data_DK1_2025
 
-    # Transform data: Drop 'Area' column, handle missing values, convert MTU to datetime
+    # Transform data: Drop 'Area' column, handle missing values
     for col in load_data_DK1.data.columns:
         if col != "Time (UTC)":
-            load_data_DK1.data[col] = pd.to_numeric(load_data_DK1.data[col], errors='coerce')
+            load_data_DK1.data[col] = pd.to_numeric(load_data_DK1.data[col],
+                                                    errors='coerce')
     load_data_DK1.data["Time (UTC)"] = (
         load_data_DK1.data["Time (UTC)"]
         .str.split(" - ").str[0].
@@ -2045,7 +2082,8 @@ if __name__ == "__main__":
     )
     load_data_DK1.set_data(
         load_data_DK1.data[
-            load_data_DK1.data["Time (UTC)"] <= pd.Timestamp("2025-09-22", tz="UTC")
+            load_data_DK1.data["Time (UTC)"] <= pd.Timestamp("2025-09-22",
+                                                             tz="UTC")
         ]
     )
     # Check for duplicate Time (UTC) values
@@ -2055,16 +2093,21 @@ if __name__ == "__main__":
     if datetime_duplicates == 0:
         # Drop columns with more than 20% missing values
         load_data_DK1 = load_data_DK1.transform_data(
-        drop_missing_threshold=0.1)
+            drop_missing_threshold=0.1)
 
         # Resample to hourly frequency, summing values within each hour
         load_data_DK1.set_data(load_data_DK1.data
-                                       .set_index("Time (UTC)").resample("h")
-                                       .sum(min_count=1))
+                               .set_index("Time (UTC)").resample("h")
+                               .sum(min_count=1))
+        
+        # Create lagged features (48 hours)
+        load_data_DK1.data["Actual Total Load [MW] - BZN|DK1_Lag48h"] = load_data_DK1.data["Actual Total Load [MW] - BZN|DK1"].shift(48)
+        load_data_DK1 = load_data_DK1.transform_data(drop_columns=["Actual Total Load [MW] - BZN|DK1"])
+
         # Reset index to a column
         load_data_DK1.set_data(load_data_DK1.data.reset_index())
 
-        # Merge with features_df 
+        # Merge with features_df
         features_df = features_df.merge(
             load_data_DK1.data, left_on='datetime',
             right_on='Time (UTC)', how='left').drop(columns=['Time (UTC)'])
@@ -2072,7 +2115,7 @@ if __name__ == "__main__":
         print("⚠️  Warning: Duplicate Time (UTC) values found. "
               "Please check the data for inconsistencies.")
 
-    print(load_data_DK1.info())
+    load_data_DK1.info()
     del load_data_DK1
 
     ###########################################################################
@@ -2101,10 +2144,11 @@ if __name__ == "__main__":
 
     del load_data_DK2_2023, load_data_DK2_2024, load_data_DK2_2025
 
-    # Transform data: Drop 'Area' column, handle missing values, convert MTU to datetime
+    # Transform data: Drop 'Area' column, handle missing values
     for col in load_data_DK2.data.columns:
         if col != "Time (UTC)":
-            load_data_DK2.data[col] = pd.to_numeric(load_data_DK2.data[col], errors='coerce')
+            load_data_DK2.data[col] = pd.to_numeric(load_data_DK2.data[col],
+                                                    errors='coerce')
     load_data_DK2.data["Time (UTC)"] = (
         load_data_DK2.data["Time (UTC)"]
         .str.split(" - ").str[0].
@@ -2112,7 +2156,8 @@ if __name__ == "__main__":
     )
     load_data_DK2.set_data(
         load_data_DK2.data[
-            load_data_DK2.data["Time (UTC)"] <= pd.Timestamp("2025-09-22", tz="UTC")
+            load_data_DK2.data["Time (UTC)"] <= pd.Timestamp("2025-09-22",
+                                                             tz="UTC")
         ]
     )
     # Check for duplicate Time (UTC) values
@@ -2122,16 +2167,21 @@ if __name__ == "__main__":
     if datetime_duplicates == 0:
         # Drop columns with more than 20% missing values
         load_data_DK2 = load_data_DK2.transform_data(
-        drop_missing_threshold=0.1)
+            drop_missing_threshold=0.1)
 
         # Resample to hourly frequency, summing values within each hour
         load_data_DK2.set_data(load_data_DK2.data
-                                       .set_index("Time (UTC)").resample("h")
-                                       .sum(min_count=1))
+                               .set_index("Time (UTC)").resample("h")
+                               .sum(min_count=1))
+        
+        # Create lagged features (48 hours)
+        load_data_DK2.data["Actual Total Load [MW] - BZN|DK2_Lag48h"] = load_data_DK2.data["Actual Total Load [MW] - BZN|DK2"].shift(48)
+        load_data_DK2 = load_data_DK2.transform_data(drop_columns=["Actual Total Load [MW] - BZN|DK2"])
+
         # Reset index to a column
         load_data_DK2.set_data(load_data_DK2.data.reset_index())
 
-        # Merge with features_df 
+        # Merge with features_df
         features_df = features_df.merge(
             load_data_DK2.data, left_on='datetime',
             right_on='Time (UTC)', how='left').drop(columns=['Time (UTC)'])
@@ -2139,7 +2189,7 @@ if __name__ == "__main__":
         print("⚠️  Warning: Duplicate Time (UTC) values found. "
               "Please check the data for inconsistencies.")
 
-    print(load_data_DK2.info())
+    load_data_DK2.info()
     del load_data_DK2
 
     ###########################################################################
@@ -2149,11 +2199,12 @@ if __name__ == "__main__":
     print("=" * 60)
 
     # Import data and validate
-    imbalance = DataHandler("RegulatingBalancePowerdata.csv", sep=';', decimal=',')
+    imbalance = DataHandler("RegulatingBalancePowerdata.csv",
+                            sep=';', decimal=',')
     imbalance_DK1 = DataHandler()
     imbalance_DK2 = DataHandler()
 
-    # Transform data: Drop 'HourDK' column, handle missing values, convert MTU to datetime
+    # Transform data: Drop 'HourDK' column, handle missing values
     imbalance = imbalance.transform_data(
         drop_columns=['HourDK',
                       'mFRRUpActBal',
@@ -2168,7 +2219,8 @@ if __name__ == "__main__":
                       )
     for col in imbalance.data.columns:
         if col not in ["HourUTC", "PriceArea"]:
-            imbalance.data[col] = pd.to_numeric(imbalance.data[col], errors='coerce')
+            imbalance.data[col] = pd.to_numeric(imbalance.data[col],
+                                                errors='coerce')
     imbalance.data["HourUTC"] = (
         imbalance.data["HourUTC"]
         .pipe(pd.to_datetime, format='%Y-%m-%d %H:%M:%S', utc=True)
@@ -2178,7 +2230,7 @@ if __name__ == "__main__":
             imbalance.data["HourUTC"] <= pd.Timestamp("2025-09-22", tz="UTC")
         ]
     )
-    
+
     # Split data into DK1 and DK2
     imbalance_DK1.set_data(
         imbalance.data[imbalance.data["PriceArea"] == "DK1"]
@@ -2195,22 +2247,30 @@ if __name__ == "__main__":
     # DK1 data processing
     # Check for duplicate HourUTC values
     datetime_duplicates = imbalance_DK1.data["HourUTC"].duplicated().sum()
-    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+    if datetime_duplicates > 0:
+        raise ValueError(
+            f"Duplicate HourUTC values found: {datetime_duplicates}")
 
     # Change column names to indicate DK1
     for col in imbalance_DK1.data.columns:
         if col != "HourUTC":
-            imbalance_DK1.data.rename(columns={col: f"{col}_DK1"}, inplace=True)
+            imbalance_DK1.data.rename(columns={col: f"{col}_DK1"},
+                                      inplace=True)
 
     if datetime_duplicates == 0:
         # Drop columns with more than 20% missing values
         imbalance_DK1 = imbalance_DK1.transform_data(
-        drop_missing_threshold=0.1)
+            drop_missing_threshold=0.1)
 
         # Resample to hourly frequency, summing values within each hour
         imbalance_DK1.set_data(imbalance_DK1.data
-                                    .set_index("HourUTC").resample("h")
-                                       .sum(min_count=1))
+                               .set_index("HourUTC").resample("h")
+                               .sum(min_count=1))
+        
+        # Create lagged features (48 hours)
+        for col in imbalance_DK1.data.columns:
+            imbalance_DK1.data[f"{col}_Lag48"] = imbalance_DK1.data[col].shift(48)
+
         # Reset index to a column
         imbalance_DK1.set_data(imbalance_DK1.data.reset_index())
 
@@ -2222,28 +2282,35 @@ if __name__ == "__main__":
         print("⚠️  Warning: Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
-    print(imbalance_DK1.info())
     del imbalance_DK1
 
     # DK2 data processing
     # Check for duplicate HourUTC values
     datetime_duplicates = imbalance_DK2.data["HourUTC"].duplicated().sum()
-    print(f"Number of duplicate HourUTC values: {datetime_duplicates}")
+    if datetime_duplicates > 0:
+        raise ValueError(
+            f"Duplicate HourUTC values found: {datetime_duplicates}")
 
     # Change column names to indicate DK2
     for col in imbalance_DK2.data.columns:
         if col != "HourUTC":
-            imbalance_DK2.data.rename(columns={col: f"{col}_DK2"}, inplace=True)
+            imbalance_DK2.data.rename(columns={col: f"{col}_DK2"},
+                                      inplace=True)
 
     if datetime_duplicates == 0:
         # Drop columns with more than 20% missing values
         imbalance_DK2 = imbalance_DK2.transform_data(
-        drop_missing_threshold=0.1)
+            drop_missing_threshold=0.1)
 
         # Resample to hourly frequency, summing values within each hour
         imbalance_DK2.set_data(imbalance_DK2.data
-                                    .set_index("HourUTC").resample("h")
-                                       .sum(min_count=1))
+                               .set_index("HourUTC").resample("h")
+                               .sum(min_count=1))
+
+        # Create lagged features (48 hours)
+        for col in imbalance_DK2.data.columns:
+            imbalance_DK2.data[f"{col}_Lag48"] = imbalance_DK2.data[col].shift(48)
+
         # Reset index to a column
         imbalance_DK2.set_data(imbalance_DK2.data.reset_index())
 
@@ -2255,11 +2322,15 @@ if __name__ == "__main__":
         print("⚠️  Warning: Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
-    print(imbalance_DK2.info())
+    imbalance_DK2.info()
     del imbalance_DK2
     print(features_df.head())
     print("Shape features: ", features_df.shape)
 
     # Save features_df as parquet file
-    features_df.to_parquet("../data/processed/imbalance_data.parquet", engine="pyarrow", index=False)
+    # Save features_df as parquet file relative to current file location
+    output_path = (Path(__file__).resolve().parent.parent /
+                   "data/processed/imbalance_data.parquet")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    features_df.to_parquet(output_path, engine="pyarrow", index=False)
     print("Final shape features: ", features_df.shape)
