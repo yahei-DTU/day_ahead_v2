@@ -13,6 +13,7 @@ Dependencies: pandas, os, typing, pathlib, data_validation
 """
 
 import os
+import sys
 from pathlib import Path
 from typing import Dict, Any, Union, Optional
 import pandas as pd
@@ -2212,9 +2213,7 @@ if __name__ == "__main__":
                       'mFRRUpActSpec',
                       'mFRRDownActSpec',
                       'ImbalancePriceDKK',
-                      'BalancingPowerPriceUpEUR',
                       'BalancingPowerPriceUpDKK',
-                      'BalancingPowerPriceDownEUR',
                       'BalancingPowerPriceDownDKK']
                       )
     for col in imbalance.data.columns:
@@ -2229,6 +2228,21 @@ if __name__ == "__main__":
         imbalance.data[
             imbalance.data["HourUTC"] <= pd.Timestamp("2025-09-22", tz="UTC")
         ]
+    )
+
+    # add column with imbalance direction, 1 if surplus, -1 if deficit
+    imbalance.data['ImbalanceDirection'] = (
+        imbalance.data.apply(
+            lambda row: 1 if row['ImbalancePriceEUR'] == row['BalancingPowerPriceDownEUR']
+            else -1 if row['ImbalancePriceEUR'] == row['BalancingPowerPriceUpEUR']
+            else 0,
+            axis=1
+        )
+    )
+
+    # drop BalancingPowerPriceDownEUR and BalancingPowerPriceUpEUR
+    imbalance = imbalance.transform_data(
+        drop_columns=['BalancingPowerPriceDownEUR', 'BalancingPowerPriceUpEUR']
     )
 
     # Split data into DK1 and DK2
@@ -2332,5 +2346,6 @@ if __name__ == "__main__":
     output_path = (Path(__file__).resolve().parent.parent /
                    "data/processed/imbalance_data.parquet")
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    features_df.to_csv(output_path.with_suffix('.csv'), index=False)
     features_df.to_parquet(output_path, engine="pyarrow", index=False)
     print("Final shape features: ", features_df.shape)
