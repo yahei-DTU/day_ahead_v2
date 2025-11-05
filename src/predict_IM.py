@@ -21,15 +21,18 @@ import matplotlib.pyplot as plt
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.model_selection import train_test_split
+from sklearn.decomposition import PCA
 from sklearn.metrics import (
     accuracy_score,
     confusion_matrix,
     ConfusionMatrixDisplay,
     f1_score,
     roc_auc_score,
+    roc_curve
 )
 from tabulate import tabulate
 from src.data_handler import DataHandler
+from matplotlib.colors import TwoSlopeNorm
 
 
 class ImbalancePredictor:
@@ -41,6 +44,7 @@ class ImbalancePredictor:
     def __init__(self, **model_params):
         self.model_params = model_params
         self.model = self._load_model()
+        self.pca = None
 
     def _load_model(self):
         """
@@ -141,19 +145,60 @@ class ImbalancePredictor:
 
         return features_processed
 
+    def apply_pca(self, features: pd.DataFrame, n_components: int = 2) -> pd.DataFrame:
+        """
+        Reduce dimensionality of standardized numeric features using PCA.
+        
+        Parameters
+        ----------
+        features : pd.DataFrame
+            The preprocessed (standardized + encoded) features.
+        n_components : int, default=2
+            Number of principal components to retain.
+
+        Returns
+        -------
+        pd.DataFrame
+            Transformed feature set with principal components.
+        """
+        if features.empty:
+            raise ValueError("Features DataFrame is empty.")
+
+        # Fit PCA if not already fitted
+        self.pca = PCA(n_components=n_components)
+        reduced = self.pca.fit_transform(features)
+
+        # Create a DataFrame with principal components
+        pca_df = pd.DataFrame(
+            reduced,
+            columns=[f"PC{i+1}" for i in range(n_components)],
+            index=features.index,
+        )
+
+        explained_var = self.pca.explained_variance_ratio_.sum()
+        print(f"[INFO] PCA reduced features to {n_components} components "
+              f"(explaining {explained_var:.2%} of variance)")
+
+        return pca_df
+    
     def evaluate_classifier(
-        self, y_pred: pd.Series, y_test: pd.Series, y_proba: pd.Series, print_metrics: bool = True,
+        self, y_pred: pd.Series, y_test: pd.Series, y_proba: pd.Series,
+        print_metrics: bool = True, alpha: float = 0.7
     ) -> Dict[str, Any]:
         """
         Evaluate classifier predictions and plot a confusion matrix.
 
-        Behavior:
-        - Filters out uncertain predictions where y_pred == 0.
-        - Maps labels from {-1, 1} to {0, 1} for metric compatibility.
-        - Computes accuracy, weighted F1, ROC AUC (on hard labels), and
-          plots confusion matrix.
+        Args:
+            y_pred: The predicted labels.
+            y_test: The true labels.
+            y_proba: The predicted probabilities.
+            print_metrics: Whether to print the evaluation metrics.
 
-        Returns a dict of metrics and the raw confusion matrix array.
+        Raises:
+            ValueError: If y_pred or y_test is None.
+
+        Returns:
+            A dictionary containing evaluation metrics and the confusion matrix.
         """
         if y_pred is None or y_test is None:
             raise ValueError("y_pred and y_test must not be None")
@@ -182,21 +227,51 @@ class ImbalancePredictor:
         else:
             auc = None
 
+        #########################################################################
         # Confusion matrix (with original label names for display)
         cm = confusion_matrix(y_test_bin, y_pred_bin, labels=[0, 1])
         disp = ConfusionMatrixDisplay(
             confusion_matrix=cm, display_labels=["-1", "1"]
         )
         disp.plot(cmap="Blues")
-        plt.title("Confusion Matrix")
+        plt.title(r"Confusion Matrix ($\alpha={}$)".format(alpha))
         plt.tight_layout()
         # Path to project root (parent of src)
         project_root = Path(__file__).resolve().parents[1]
         figures_dir = project_root / "figures"
         figures_dir.mkdir(exist_ok=True)
-        plt.savefig(figures_dir / "confusion_matrix.png")
+        plt.savefig(figures_dir / f"confusion_matrix_{alpha}.pdf")
         plt.close()
 
+        #######################################################################
+        # ROC curve
+        if y_proba is not None:
+
+            # Align scores with evaluated (non-zero) predictions
+            y_scores = y_proba.loc[y_pred_bin.index]
+
+            # Compute ROC
+            fpr, tpr, _ = roc_curve(y_test_bin, y_scores)
+
+            # Plot ROC
+            plt.figure()
+            plt.plot(fpr, tpr, color="darkorange", lw=2, label=f"ROC curve (AUC = {auc:.3f})")
+            plt.plot([0, 1], [0, 1], color="navy", lw=1, linestyle="--")
+            plt.xlim([0.0, 1.0])
+            plt.ylim([0.0, 1.05])
+            plt.xlabel("False Positive Rate")
+            plt.ylabel("True Positive Rate")
+            plt.title(r"ROC Curve ($\alpha={}$)".format(alpha))
+            plt.legend(loc="lower right")
+            plt.tight_layout()
+
+            # Save ROC figure next to confusion matrix
+            plt.savefig(figures_dir / f"roc_curve_{alpha}.pdf")
+            plt.close()
+
+
+        #######################################################################
+        # Compile metrics
         metrics = {
             "accuracy": acc,
             "f1": f1,
@@ -242,35 +317,10 @@ if __name__ == "__main__":
     imbalance_data = DataHandler("imbalance_data.parquet",
                                  "data/processed")
 
-    # Import weather coordinates
-    # coordinates = DataHandler("dk_mesh_points.csv", "data/processed")
-    # latitudes = coordinates.data['latitude'].tolist()
-    # longitudes = coordinates.data['longitude'].tolist()
+    #########################################################################
+    # DK1 example
+    #########################################################################
 
-    # weather_data = OpenMeteoHandler(latitude=latitudes,
-    #                                 longitude=longitudes,
-    #                                 hourly=["temperature_2m",
-    #                                         "relative_humidity_2m",
-    #                                         "cloud_cover",
-    #                                         "wind_speed_10m",
-    #                                         "wind_speed_80m",
-    #                                         "wind_speed_120m",
-    #                                         "wind_speed_180m",
-    #                                         "wind_direction_10m",
-    #                                         "wind_direction_80m",
-    #                                         "wind_direction_120m",
-    #                                         "wind_direction_180m",
-    #                                         "surface_pressure",
-    #                                         "visibility"],
-    #                                 models="dmi_harmonie_arome_europe",
-    #                                 start_date="2023-01-01",
-    #                                 end_date="2024-12-31"
-    #                                 )
-    # _ = weather_data.validate_data(print_report=True)
-    # print(weather_data.head())
-    # print(weather_data.tail())
-
-    # DK2 example
     imbalance_data.set_data(
         imbalance_data.data[
             (imbalance_data.data['datetime'] < '2025-01-03') &
@@ -278,9 +328,9 @@ if __name__ == "__main__":
         ]
     )
 
-    # Drop rows where ImbalanceDirection_DK2 is 0
+    # Drop rows where ImbalanceDirection_DK1 is 0
     imbalance_data.set_data(
-        imbalance_data.data[imbalance_data.data['ImbalanceDirection_DK2'] != 0]
+        imbalance_data.data[imbalance_data.data['ImbalanceDirection_DK1'] != 0]
     )
 
     imbalance_data = imbalance_data.transform_data(
@@ -289,26 +339,26 @@ if __name__ == "__main__":
     # _ = imbalance_data.validate_data(print_report=True)
 
     #########################################################################
-    # Example of DK2 prediction
+    # Example of DK1 prediction
     #########################################################################
 
     # No NaNs or zeros in target
-    dk2_data = imbalance_data.data[imbalance_data.data['ImbalanceDirection_DK2'].notnull()]
-    dk2_data = dk2_data[dk2_data['ImbalanceDirection_DK2'] != 0]
+    dk1_data = imbalance_data.data[imbalance_data.data['ImbalanceDirection_DK1'].notnull()]
+    dk1_data = dk1_data[dk1_data['ImbalanceDirection_DK1'] != 0]
     # Set index to datetime
-    dk2_data = dk2_data.set_index('datetime')
+    dk1_data = dk1_data.set_index('datetime')
     # Set features and target
     X = DataHandler()
-    X.set_data(dk2_data)
+    X.set_data(dk1_data)
     X = X.transform_data(drop_columns=['ImbalancePriceEUR_DK1',
                                        'ImbalanceMWh_DK1',
                                        'ImbalancePriceEUR_DK2',
                                        'ImbalanceMWh_DK2',
                                        'ImbalanceDirection_DK1',
                                        'ImbalanceDirection_DK2'])
-    y = dk2_data['ImbalanceDirection_DK2']
+    y = dk1_data['ImbalanceDirection_DK1']
 
-    del dk2_data  # Free memory
+    del dk1_data  # Free memory
 
     # predictor
     predictor = LogisticRegressionPredictor(penalty='l1',
@@ -322,7 +372,7 @@ if __name__ == "__main__":
     X_train, X_test, y_train, y_test = train_test_split(
         X_processed,
         y,
-        test_size=0.5,
+        test_size=0.2,
         shuffle=True,
         random_state=42,
         stratify=y,
@@ -334,7 +384,42 @@ if __name__ == "__main__":
     # Predict
     prediction_proba = predictor.predict_proba(X_test)
 
-    predictions = predictor.predict(prediction_proba, alpha=0.9)
+    alpha = 0.9
+    predictions = predictor.predict(prediction_proba, alpha=alpha)
 
     # Evaluate and plot confusion matrix
-    metrics = predictor.evaluate_classifier(predictions, y_test, prediction_proba)
+    metrics = predictor.evaluate_classifier(predictions, y_test, prediction_proba, alpha=alpha)
+
+    #########################################################################
+    # PCA and Visualization of Decision Boundary
+    #########################################################################
+    # Apply PCA to test set
+    X_test_pca = predictor.apply_pca(X_test, n_components=2)
+    print(X_test_pca.head())
+
+    # Visualize decision boundary
+    plt.figure(figsize=(10, 6))
+    # Align predictions with PCA dataframe index
+    preds_aligned = predictions.loc[X_test_pca.index]
+    norm = TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1)
+    sc = plt.scatter(
+        X_test_pca.iloc[:, 0],
+        X_test_pca.iloc[:, 1],
+        c=preds_aligned,
+        cmap="coolwarm",
+        norm=norm,
+        alpha=0.7,
+        edgecolor="black",
+    )
+    plt.title(r"Decision Boundary ($\alpha={}$)".format(alpha))
+    plt.xlabel("PCA Component 1")
+    plt.ylabel("PCA Component 2")
+    cbar = plt.colorbar(sc, ticks=[-1, 0, 1])
+    cbar.set_label("Predicted Class")
+    # Path to project root (parent of src)
+    project_root = Path(__file__).resolve().parents[1]
+    figures_dir = project_root / "figures"
+    figures_dir.mkdir(exist_ok=True)
+    plt.savefig(figures_dir / f"decision_boundary_{alpha}.pdf")
+    plt.tight_layout()
+    plt.close()
