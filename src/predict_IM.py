@@ -12,6 +12,8 @@ Contact: yahei@dtu.dk
 Dependencies: 
 """
 
+#plt.style.use("seaborn-v0_8-whitegrid")
+
 import sys
 from pathlib import Path
 from typing import Dict, Any
@@ -32,7 +34,47 @@ from sklearn.metrics import (
 )
 from tabulate import tabulate
 from src.data_handler import DataHandler
-from matplotlib.colors import TwoSlopeNorm
+from matplotlib.colors import TwoSlopeNorm, ListedColormap
+from matplotlib.lines import Line2D
+
+###########################################################################
+# Plotting settings
+x_length = 10
+golden_ratio = (1 + 5 ** 0.5) / 2
+plt.rcParams['figure.figsize'] = (x_length, x_length / golden_ratio)
+plt.rcParams['font.size'] = 12
+plt.rcParams['axes.titlesize'] = 14
+plt.rcParams['axes.labelsize'] = 12
+plt.rcParams['xtick.labelsize'] = 12
+plt.rcParams['ytick.labelsize'] = 12
+
+color_palette_1 = {
+    'black': (0, 0, 0),
+    'orange': (230, 159, 0),
+    'sky_blue': (86, 180, 233),
+    'bluish_green': (0, 158, 115),
+    'yellow': (240, 228, 66),
+    'blue': (0, 114, 178),
+    'vermillion': (213, 94, 0),
+    'reddish_purple': (204, 121, 167)
+}
+# Normalize to 0-1 range for matplotlib
+color_palette_1 = {name: (r/255, g/255, b/255)
+                for name, (r, g, b) in color_palette_1.items()}
+# Color palette 2 (colorblind-friendly) from S. Bolognani
+color_palette_2 = {
+    'blue': (68, 119, 170),
+    'cyan': (102, 204, 238),
+    'green': (34, 136, 51),
+    'yellow': (204, 187, 68),
+    'red': (238, 102, 119),
+    'purple': (170, 51, 119),
+    'grey': (187, 187, 187)
+}
+color_palette_2 = {name: (r/255, g/255, b/255)
+                for name, (r, g, b) in color_palette_2.items()}
+############################################################################
+
 
 
 class ImbalancePredictor:
@@ -149,16 +191,11 @@ class ImbalancePredictor:
         """
         Reduce dimensionality of standardized numeric features using PCA.
         
-        Parameters
-        ----------
-        features : pd.DataFrame
-            The preprocessed (standardized + encoded) features.
-        n_components : int, default=2
-            Number of principal components to retain.
+        Args:
+            features: DataFrame with the preprocessed features.
+            n_components: Number of principal components to retain.
 
-        Returns
-        -------
-        pd.DataFrame
+        Returns:
             Transformed feature set with principal components.
         """
         if features.empty:
@@ -181,10 +218,164 @@ class ImbalancePredictor:
 
         return pca_df
     
+    def plot_decision_boundary(self, X_pca: pd.DataFrame,
+                               y_pred: pd.Series, y_true: pd.Series,
+                               alpha: float, show_misclassified: bool,
+                               y_magnitude: pd.Series = None) -> None:
+        """
+        Visualize decision boundary in PCA-reduced feature space.
+
+        Args:
+            X_pca: DataFrame with PCA-reduced features (2 components).
+            y_pred: Series with predicted labels.
+            y_true: Series with true labels.
+            alpha: Confidence threshold used for predictions.
+            show_misclassified: Whether to highlight misclassified points.
+            y_magnitude: Series with imbalance magnitudes for marker sizing.
+        """
+        plt.style.use('seaborn-v0_8-colorblind')
+        fig, ax = plt.subplots()
+        # Align predictions with PCA dataframe index
+        preds_aligned = y_pred.loc[X_pca.index]
+        true_aligned = y_true.loc[X_pca.index]
+        
+        # Color normalization: -1 (shortage), 0 (uncertain), 1 (surplus)
+        norm = TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1)
+        
+        # Use first 3 colors defined at module level
+        cmap_colors = [color_palette_1["reddish_purple"],
+                       color_palette_1["orange"],
+                       color_palette_1["bluish_green"]]
+        custom_cmap = ListedColormap(cmap_colors)
+        
+        # Identify mismatches (excluding uncertain predictions)
+        mismatch = (preds_aligned != true_aligned) & (preds_aligned != 0)
+        n_mismatch = int(mismatch.sum())
+        n_total = int((preds_aligned != 0).sum())
+        n_correct = n_total - n_mismatch
+        accuracy = n_correct / n_total if n_total > 0 else 0
+        
+        # Separate correct and incorrect predictions
+        correct_mask = ~mismatch
+        
+        # Calculate marker sizes based on magnitude if provided
+        if y_magnitude is not None:
+            # Align magnitude with predictions
+            magnitude_aligned = y_magnitude.loc[X_pca.index].abs()
+            # Scale to reasonable marker size range (10 to 200)
+            min_size, max_size = 10, 200
+            mag_min, mag_max = magnitude_aligned.min(), magnitude_aligned.max()
+            if mag_max > mag_min:
+                sizes = min_size + (magnitude_aligned - mag_min) / \
+                        (mag_max - mag_min) * (max_size - min_size)
+            else:
+                sizes = pd.Series(50, index=magnitude_aligned.index)
+        else:
+            sizes = None
+        
+        # Plot based on show_misclassified flag
+        if show_misclassified:
+            # Plot correct predictions
+            if correct_mask.any():
+                sc_correct = ax.scatter(
+                    X_pca.loc[correct_mask].iloc[:, 0],
+                    X_pca.loc[correct_mask].iloc[:, 1],
+                    c=preds_aligned[correct_mask],
+                    cmap=custom_cmap,
+                    norm=norm,
+                    alpha=0.6,
+                    s=sizes[correct_mask] if sizes is not None else 50,
+                    edgecolors="white",
+                    linewidths=0.5,
+                    label="Correct",
+                )
+            
+            # Plot mismatches with prominent marker
+            if mismatch.any():
+                sc_mismatch = ax.scatter(
+                    X_pca.loc[mismatch].iloc[:, 0],
+                    X_pca.loc[mismatch].iloc[:, 1],
+                    c=preds_aligned[mismatch],
+                    cmap=custom_cmap,
+                    norm=norm,
+                    alpha=0.9,
+                    s=sizes[mismatch] if sizes is not None else 80,
+                    edgecolors="black",
+                    linewidths=1.5,
+                    marker="X",
+                    label=f"Misclassified ({n_mismatch})",
+                )
+        else:
+            # Plot all predictions together without distinguishing misclassified
+            sc_all = ax.scatter(
+                X_pca.iloc[:, 0],
+                X_pca.iloc[:, 1],
+                c=preds_aligned,
+                cmap=custom_cmap,
+                norm=norm,
+                alpha=0.7,
+                s=sizes if sizes is not None else 50,
+                edgecolors="white",
+                linewidths=0.5,
+            )
+        
+        # Title with accuracy
+        title = (
+            r"Decision Boundary in PCA Space "
+            rf"($\alpha={alpha:.2f}$, Accuracy={accuracy:.1%})"
+        )
+        ax.set_title(title, pad=15)
+        ax.set_xlabel("First Principal Component")
+        ax.set_ylabel("Second Principal Component")
+                
+        # Colorbar with custom labels
+        if show_misclassified:
+            scatter_ref = sc_correct if correct_mask.any() else sc_mismatch
+        else:
+            scatter_ref = sc_all
+            
+        cbar = plt.colorbar(
+            scatter_ref,
+            ax=ax,
+            ticks=[-1, 0, 1]
+        )
+        cbar.ax.set_yticklabels(
+            ["Deficit (-1)", "Uncertain (0)", "Surplus (1)"]
+        )
+        
+        # Custom legend - only show if misclassified points are displayed
+        if show_misclassified:
+            legend_handles = [
+                Line2D([0], [0], marker='o', color='w',
+                       markerfacecolor='gray',
+                       markersize=8, linestyle='None',
+                       label=f'Correctly Classified ({n_correct})'),
+                Line2D([0], [0], marker='X', color='w',
+                       markerfacecolor='gray',
+                       markeredgecolor='black', markersize=8,
+                       linestyle='None',
+                       label=f'Misclassified ({n_mismatch})')
+            ]
+            ax.legend(handles=legend_handles, loc="best",
+                      framealpha=0.9, fontsize=10)
+        
+        # Save figure
+        project_root = Path(__file__).resolve().parents[1]
+        figures_dir = project_root / "figures"
+        figures_dir.mkdir(exist_ok=True)
+        
+        plt.tight_layout()
+        plt.savefig(
+            figures_dir / f"decision_boundary_{alpha}.pdf",
+            dpi=300,
+            bbox_inches="tight"
+        )
+        plt.close()
+    
     def evaluate_classifier(
         self, y_pred: pd.Series, y_test: pd.Series, y_proba: pd.Series,
         print_metrics: bool = True, alpha: float = 0.7
-    ) -> Dict[str, Any]:
+        ) -> Dict[str, Any]:
         """
         Evaluate classifier predictions and plot a confusion matrix.
 
@@ -343,7 +534,8 @@ if __name__ == "__main__":
     #########################################################################
 
     # No NaNs or zeros in target
-    dk1_data = imbalance_data.data[imbalance_data.data['ImbalanceDirection_DK1'].notnull()]
+    dk1_data = imbalance_data.data[
+        imbalance_data.data['ImbalanceDirection_DK1'].notnull()]
     dk1_data = dk1_data[dk1_data['ImbalanceDirection_DK1'] != 0]
     # Set index to datetime
     dk1_data = dk1_data.set_index('datetime')
@@ -356,7 +548,8 @@ if __name__ == "__main__":
                                        'ImbalanceMWh_DK2',
                                        'ImbalanceDirection_DK1',
                                        'ImbalanceDirection_DK2'])
-    y = dk1_data['ImbalanceDirection_DK1']
+    y_label = dk1_data['ImbalanceDirection_DK1']
+    y_magnitude = dk1_data['ImbalanceMWh_DK1']
 
     del dk1_data  # Free memory
 
@@ -371,12 +564,16 @@ if __name__ == "__main__":
     # Split into train and test
     X_train, X_test, y_train, y_test = train_test_split(
         X_processed,
-        y,
+        y_label,
         test_size=0.2,
         shuffle=True,
         random_state=42,
-        stratify=y,
+        stratify=y_label,
     )
+    
+    # Split magnitude with same indices
+    y_magnitude_train = y_magnitude.loc[y_train.index]
+    y_magnitude_test = y_magnitude.loc[y_test.index]
 
     # Fit model
     predictor.fit(X_train, y_train)
@@ -388,38 +585,19 @@ if __name__ == "__main__":
     predictions = predictor.predict(prediction_proba, alpha=alpha)
 
     # Evaluate and plot confusion matrix
-    metrics = predictor.evaluate_classifier(predictions, y_test, prediction_proba, alpha=alpha)
+    metrics = predictor.evaluate_classifier(predictions, y_test,
+                                            prediction_proba, alpha=alpha)
 
     #########################################################################
     # PCA and Visualization of Decision Boundary
     #########################################################################
     # Apply PCA to test set
     X_test_pca = predictor.apply_pca(X_test, n_components=2)
-    print(X_test_pca.head())
 
-    # Visualize decision boundary
-    plt.figure(figsize=(10, 6))
-    # Align predictions with PCA dataframe index
-    preds_aligned = predictions.loc[X_test_pca.index]
-    norm = TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1)
-    sc = plt.scatter(
-        X_test_pca.iloc[:, 0],
-        X_test_pca.iloc[:, 1],
-        c=preds_aligned,
-        cmap="coolwarm",
-        norm=norm,
-        alpha=0.7,
-        edgecolor="black",
-    )
-    plt.title(r"Decision Boundary ($\alpha={}$)".format(alpha))
-    plt.xlabel("PCA Component 1")
-    plt.ylabel("PCA Component 2")
-    cbar = plt.colorbar(sc, ticks=[-1, 0, 1])
-    cbar.set_label("Predicted Class")
-    # Path to project root (parent of src)
-    project_root = Path(__file__).resolve().parents[1]
-    figures_dir = project_root / "figures"
-    figures_dir.mkdir(exist_ok=True)
-    plt.savefig(figures_dir / f"decision_boundary_{alpha}.pdf")
-    plt.tight_layout()
-    plt.close()
+    # Plot decision boundary
+    predictor.plot_decision_boundary(X_test_pca, predictions,
+                                     y_test,
+                                     alpha=alpha,
+                                     show_misclassified=True,
+                                     y_magnitude=y_magnitude_test)
+
