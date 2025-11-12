@@ -16,6 +16,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Dict, Any, Union, Optional
+import numpy as np
 import pandas as pd
 
 import openmeteo_requests
@@ -707,7 +708,7 @@ class OpenMeteoHandler(DataHandler):
 
     def _fetch_data(self) -> pd.DataFrame:
         """
-        Fetch historical forecast data from OpenMeteo API and return as a pandas DataFrame.
+        Fetch historical forecast data from OpenMeteo API and return as a pa  ndas DataFrame.
 
         Returns:
             pd.DataFrame: Data fetched from the API.
@@ -728,19 +729,26 @@ class OpenMeteoHandler(DataHandler):
             responses = openmeteo.weather_api(api_url,
                                               params=self.parameters)
         except Exception as e:
-            print(f"❌ Error fetching data from OpenMeteo API: {str(e)}")
-            raise            # Process bounding box locations
+            print(f"[Error] fetching data from OpenMeteo API: {str(e)}")
+            raise
         try:
             variables = self.parameters.get("hourly", [])
             print(f"Requested variables: {variables}")
-        except:
-            raise ValueError("No 'hourly' variables specified in parameters.")
+        except KeyError as e:
+            raise ValueError(
+                "No 'hourly' variables specified in parameters.") from e
         for response in responses:
-            print(f"\nCoordinates: {response.Latitude()}°N {response.Longitude()}°E")
+            print(
+                f"\nCoordinates: {response.Latitude()}°N "
+                f"{response.Longitude()}°E"
+            )
             print(f"Elevation: {response.Elevation()} m asl")
-            print(f"Timezone difference to GMT+0: {response.UtcOffsetSeconds()}s")
+            print(
+                f"Timezone difference to GMT+0: {response.UtcOffsetSeconds()}s"
+            )
 
-            # Process hourly data. The order of variables needs to be the same as requested.
+            # Process hourly data. The order of variables needs to be the same
+            # as requested.
             hourly = response.Hourly()
             hourly_data = {"date": pd.date_range(
                 start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
@@ -753,6 +761,35 @@ class OpenMeteoHandler(DataHandler):
                 hourly_data[var_name] = var
         return pd.DataFrame(data=hourly_data)
 
+
+params = {
+    "latitude": 56.9564,
+    "longitude": 10.2232,
+    "start_date": "2023-01-01",
+    "end_date": "2025-11-10",
+    "hourly": ["wind_speed_10m", "temperature_2m", "cloud_cover", "wind_direction_10m"],
+    "models": "dmi_harmonie_arome_europe",
+}
+
+
+
+weather_data = OpenMeteoHandler(**params)
+print(weather_data.head())
+print(weather_data.tail())
+
+# Print total and per-column NaN counts for weather_data
+if hasattr(weather_data, "data") and isinstance(weather_data.data, pd.DataFrame):
+    nan_by_col = weather_data.data.isna().sum()
+    total_nans = int(nan_by_col.sum())
+    print(f"Total NaN values in weather_data: {total_nans}")
+    print("NaN by column:")
+    for col, cnt in nan_by_col.items():
+        print(f"  {col}: {int(cnt)}")
+else:
+    print("weather_data does not contain a pandas DataFrame in .data")
+
+    
+sys.exit(0)
 
 if __name__ == "__main__":
     # Create an empty DataFrame with hourly datetime index
@@ -2333,11 +2370,53 @@ if __name__ == "__main__":
             imbalance_DK2.data, left_on='datetime',
             right_on='HourUTC', how='left').drop(columns=['HourUTC'])
     else:
-        print("⚠️  Warning: Duplicate HourUTC values found. "
+        print("WARNING: Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
     imbalance_DK2.info()
     del imbalance_DK2
+
+    ###########################################################################
+
+    print("=" * 60)
+    print("Adding time-based features")
+    print("=" * 60)
+
+    # Add hourly cyclical features
+    features_df['sin_hour'] = np.sin(
+        features_df['datetime'].dt.hour * (2 * np.pi / 24))
+    features_df['cos_hour'] = np.cos(
+        features_df['datetime'].dt.hour * (2 * np.pi / 24))
+
+    # Add daily one-hot encoded features
+    day_of_week = pd.get_dummies(features_df['datetime'].dt.dayofweek, prefix='day')
+    features_df = pd.concat([features_df, day_of_week], axis=1)
+
+
+
+    ##########################################################################
+
+    print("=" * 60)
+    print("Adding weather features")
+    print("=" * 60)
+
+    params = {
+        "latitude": 54.9872,
+        "longitude": 8.6652,
+        "start_date": "2023-01-01",
+        "end_date": "2025-11-10",
+        "hourly": ["wind_speed_10m", "temperature_2m", "cloud_cover", "wind_direction_10m"],
+        "models": "dmi_harmonie_arome_europe",
+    }
+
+    weather_data = OpenMeteoHandler(params)
+
+    ##########################################################################
+
+    print("=" * 60)
+    print("Final feature set overview")
+    print("=" * 60)
+
     print(features_df.head())
     print("Shape features: ", features_df.shape)
 

@@ -1,3 +1,4 @@
-ETH_exercise/
 .vscode/
 .mypy_cache/
+.cache.sqlite
+__pycache__/  

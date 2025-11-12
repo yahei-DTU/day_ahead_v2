@@ -301,7 +301,7 @@ class ImbalancePredictor:
                     alpha=0.9,
                     s=sizes[mismatch] if sizes is not None else 80,
                     edgecolors="black",
-                    linewidths=1.5,
+                    linewidths=1,
                     marker="X",
                     label=f"Misclassified ({n_mismatch})",
                 )
