@@ -698,11 +698,14 @@ class OpenMeteoHandler(DataHandler):
     A class to import historical forecast data from OpenMeteo API.
 
     Attributes:
+        api_url (str): The OpenMeteo API endpoint URL.
         parameters (Dict[str, Any]): Parameters for the API request.
+
     """
-    def __init__(self, **params: Any):
+    def __init__(self, api_url,**params: Any):
         # Only import if not already loaded
         super().__init__(filename=None)
+        self.api_url = api_url
         self.parameters: Dict[str, Any] = params
         self._data: pd.DataFrame = self._fetch_data()
 
@@ -723,10 +726,9 @@ class OpenMeteoHandler(DataHandler):
         retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
         openmeteo = openmeteo_requests.Client(session=retry_session)
 
-        api_url = "https://historical-forecast-api.open-meteo.com/v1/forecast"
         try:
             print("Fetching data from OpenMeteo API...")
-            responses = openmeteo.weather_api(api_url,
+            responses = openmeteo.weather_api(self.api_url,
                                               params=self.parameters)
         except Exception as e:
             print(f"[Error] fetching data from OpenMeteo API: {str(e)}")
@@ -737,12 +739,26 @@ class OpenMeteoHandler(DataHandler):
         except KeyError as e:
             raise ValueError(
                 "No 'hourly' variables specified in parameters.") from e
+        print(f"Number of responses: {len(responses)}")
+
+        # Empty DataFrame with hourly datetime index
+        try:
+            start = pd.to_datetime(self.parameters.get("start_date"))
+            end = pd.to_datetime(self.parameters.get("end_date"))
+        except Exception as e:
+            raise ValueError(f"Invalid start_date or end_date in parameters: {e}")
+
+        hourly_index = pd.date_range(start=start, end=end, freq='h', tz='UTC')
+        hourly_data = pd.DataFrame({"datetime": hourly_index})
+        
+        # Loop through responses and extract data
         for response in responses:
+            lat = response.Latitude()
+            lon = response.Longitude()
             print(
-                f"\nCoordinates: {response.Latitude()}°N "
-                f"{response.Longitude()}°E"
+                f"\nCoordinates: {lat}°N "
+                f"{lon}°E"
             )
-            print(f"Elevation: {response.Elevation()} m asl")
             print(
                 f"Timezone difference to GMT+0: {response.UtcOffsetSeconds()}s"
             )
@@ -750,7 +766,7 @@ class OpenMeteoHandler(DataHandler):
             # Process hourly data. The order of variables needs to be the same
             # as requested.
             hourly = response.Hourly()
-            hourly_data = {"date": pd.date_range(
+            response_data = {"date": pd.date_range(
                 start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
                 end=pd.to_datetime(hourly.TimeEnd(), unit="s", utc=True),
                 freq=pd.Timedelta(seconds=hourly.Interval()),
@@ -758,38 +774,23 @@ class OpenMeteoHandler(DataHandler):
             )}
             for i, var_name in enumerate(variables):
                 var = hourly.Variables(i).ValuesAsNumpy()
-                hourly_data[var_name] = var
-        return pd.DataFrame(data=hourly_data)
+                response_data[var_name] = var
+            response_df = pd.DataFrame(data=response_data)
+            # build suffix from response coordinates
+            suffix = f"_{lat}N_{lon}E"
+            # rename all variable columns except the datetime column
+            rename_map = {
+                col: f"{col}{suffix}" for col in response_df.columns
+                if col != 'date'
+            }
+            response_df = response_df.rename(columns=rename_map)
+            
+            # Merge response data into hourly_data
+            hourly_data = hourly_data.merge(
+                response_df, left_on='datetime', right_on='date', how='left'
+            ).drop(columns=['date'])
 
-
-params = {
-    "latitude": 56.9564,
-    "longitude": 10.2232,
-    "start_date": "2023-01-01",
-    "end_date": "2025-11-10",
-    "hourly": ["wind_speed_10m", "temperature_2m", "cloud_cover", "wind_direction_10m"],
-    "models": "dmi_harmonie_arome_europe",
-}
-
-
-
-weather_data = OpenMeteoHandler(**params)
-print(weather_data.head())
-print(weather_data.tail())
-
-# Print total and per-column NaN counts for weather_data
-if hasattr(weather_data, "data") and isinstance(weather_data.data, pd.DataFrame):
-    nan_by_col = weather_data.data.isna().sum()
-    total_nans = int(nan_by_col.sum())
-    print(f"Total NaN values in weather_data: {total_nans}")
-    print("NaN by column:")
-    for col, cnt in nan_by_col.items():
-        print(f"  {col}: {int(cnt)}")
-else:
-    print("weather_data does not contain a pandas DataFrame in .data")
-
-    
-sys.exit(0)
+        return hourly_data
 
 if __name__ == "__main__":
     # Create an empty DataFrame with hourly datetime index
@@ -2401,15 +2402,34 @@ if __name__ == "__main__":
     print("=" * 60)
 
     params = {
-        "latitude": 54.9872,
-        "longitude": 8.6652,
-        "start_date": "2023-01-01",
+        "latitude": [57.5, 56.1, 54.8, 57.0, 56.1, 55.5, 56.2, 55.7, 55.4, 55.0],
+        "longitude": [8.0, 8.1, 8.4, 9.7, 9.0, 9.5, 10.2, 9.7, 10.3, 9.7],
+        "start_date": "2025-11-01",
         "end_date": "2025-11-10",
-        "hourly": ["wind_speed_10m", "temperature_2m", "cloud_cover", "wind_direction_10m"],
-        "models": "dmi_harmonie_arome_europe",
+        "hourly": ["temperature_2m",
+                   "cloud_cover",
+                   "wind_speed_10m",
+                   "wind_direction_10m"],
+        "models": "era5",
     }
 
-    weather_data = OpenMeteoHandler(params)
+    API_URL = "https://archive-api.open-meteo.com/v1/archive"
+    weather_data = OpenMeteoHandler(API_URL, **params)
+
+    # Merge weather data with features_df
+    features_df = features_df.merge(
+        weather_data.data, on='datetime', how='left')
+
+    # Print total and per-column NaN counts for weather_data
+    if hasattr(weather_data, "data") and isinstance(weather_data.data, pd.DataFrame):
+        nan_by_col = weather_data.data.isna().sum()
+        total_nans = int(nan_by_col.sum())
+        print(f"Total NaN values in weather_data: {total_nans}")
+        print("NaN by column:")
+        for col, cnt in nan_by_col.items():
+            print(f"  {col}: {int(cnt)}")
+    else:
+        print("weather_data does not contain a pandas DataFrame in .data")
 
     ##########################################################################
 
