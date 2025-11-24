@@ -2404,7 +2404,7 @@ if __name__ == "__main__":
     params = {
         "latitude": [57.5, 56.1, 54.8, 57.0, 56.1, 55.5, 56.2, 55.7, 55.4, 55.0],
         "longitude": [8.0, 8.1, 8.4, 9.7, 9.0, 9.5, 10.2, 9.7, 10.3, 9.7],
-        "start_date": "2025-11-01",
+        "start_date": "2023-01-01",
         "end_date": "2025-11-10",
         "hourly": ["temperature_2m",
                    "cloud_cover",
@@ -2440,7 +2440,6 @@ if __name__ == "__main__":
     print(features_df.head())
     print("Shape features: ", features_df.shape)
 
-    # Save features_df as parquet file
     # Save features_df as parquet file relative to current file location
     output_path = (Path(__file__).resolve().parent.parent /
                    "data/processed/imbalance_data.parquet")

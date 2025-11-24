@@ -9,10 +9,14 @@ Description:
     Model to predict the system imbalance (IM).
 
 Contact: yahei@dtu.dk
-Dependencies: 
+Dependencies:
+    - pandas
+    - numpy
+    - matplotlib
+    - scikit-learn
+    - tabulate
+    - src.data_handler (custom module)
 """
-
-#plt.style.use("seaborn-v0_8-whitegrid")
 
 import sys
 from pathlib import Path
@@ -22,6 +26,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.feature_selection import RFE
 from sklearn.model_selection import train_test_split
 from sklearn.decomposition import PCA
 from sklearn.metrics import (
@@ -33,9 +38,11 @@ from sklearn.metrics import (
     roc_curve
 )
 from tabulate import tabulate
-from src.data_handler import DataHandler
 from matplotlib.colors import TwoSlopeNorm, ListedColormap
 from matplotlib.lines import Line2D
+import yaml
+from src.data_handler import DataHandler
+
 
 ###########################################################################
 # Plotting settings
@@ -60,7 +67,7 @@ color_palette_1 = {
 }
 # Normalize to 0-1 range for matplotlib
 color_palette_1 = {name: (r/255, g/255, b/255)
-                for name, (r, g, b) in color_palette_1.items()}
+                   for name, (r, g, b) in color_palette_1.items()}
 # Color palette 2 (colorblind-friendly) from S. Bolognani
 color_palette_2 = {
     'blue': (68, 119, 170),
@@ -72,9 +79,8 @@ color_palette_2 = {
     'grey': (187, 187, 187)
 }
 color_palette_2 = {name: (r/255, g/255, b/255)
-                for name, (r, g, b) in color_palette_2.items()}
+                   for name, (r, g, b) in color_palette_2.items()}
 ############################################################################
-
 
 
 class ImbalancePredictor:
@@ -186,6 +192,33 @@ class ImbalancePredictor:
             features_processed = features_cat
 
         return features_processed
+
+    def rfe(self, features: pd.DataFrame,
+            target: pd.Series, n_features_to_select: int) -> pd.DataFrame:
+        """
+        Perform Recursive Feature Elimination (RFE) to select top features.
+
+        Args:
+            features: DataFrame with the preprocessed features.
+            target: Series with the target labels.
+            n_features_to_select: Number of top features to select.
+
+        Returns:
+            DataFrame with selected top features.
+        """
+        if self.model is None:
+            raise ValueError("Model is not loaded.")
+        if features.empty or target.empty:
+            raise ValueError("Features or target DataFrame is empty.")
+
+        rfe = RFE(estimator=self.model,
+                  n_features_to_select=n_features_to_select)
+        rfe.fit(features, target)
+
+        selected_features = features.columns[rfe.support_]
+        print(f"[INFO] Selected top {n_features_to_select} features via RFE.")
+
+        return features[selected_features]
 
     def apply_pca(self, features: pd.DataFrame, n_components: int = 2) -> pd.DataFrame:
         """
@@ -504,6 +537,12 @@ class BartPredictor(ImbalancePredictor):
 
 
 if __name__ == "__main__":
+    # Load configuration
+    project_root = Path(__file__).resolve().parents[1]
+    config_path = project_root / "config" / "config_dev.yaml"
+    with open(config_path, 'r') as file:
+        config = yaml.safe_load(file)
+
     # Import features
     imbalance_data = DataHandler("imbalance_data.parquet",
                                  "data/processed")
@@ -525,8 +564,8 @@ if __name__ == "__main__":
     )
 
     imbalance_data = imbalance_data.transform_data(
-            drop_missing_threshold=0.1)
-    
+        drop_missing_threshold=0.1)
+
     # _ = imbalance_data.validate_data(print_report=True)
 
     #########################################################################
@@ -556,32 +595,50 @@ if __name__ == "__main__":
     # predictor
     predictor = LogisticRegressionPredictor(penalty='l1',
                                             max_iter=10000,
-                                            solver='saga')
+                                            solver='saga',
+                                            class_weight='balanced')
 
     # Preprocess features
+    print("[INFO] Preprocessing features...")
     X_processed = predictor.preprocess(X.data)
 
     # Split into train and test
     X_train, X_test, y_train, y_test = train_test_split(
         X_processed,
         y_label,
-        test_size=0.2,
-        shuffle=True,
+        test_size=0.5,
+        shuffle=False,
         random_state=42,
-        stratify=y_label,
+        # stratify=y_label,
     )
-    
+
+    # Optional: Feature selection via RFE
+    if config.get('feature_selection', {}).get('enabled', False):
+        method = config['feature_selection'].get('method', 'RFE')
+        n_features = config['feature_selection'].get('n_features_to_select', 20)
+        if method == 'RFE':
+            print(f"[INFO] Performing feature selection using RFE...")
+            X_processed = predictor.rfe(
+                X_train, y_train, n_features_to_select=n_features
+            )
+        else:
+            print(f"[WARNING] Feature selection method '{method}' not recognized. Skipping feature selection.")
+
     # Split magnitude with same indices
     y_magnitude_train = y_magnitude.loc[y_train.index]
     y_magnitude_test = y_magnitude.loc[y_test.index]
 
     # Fit model
+    print("[INFO] Fitting model...")    
     predictor.fit(X_train, y_train)
 
     # Predict
+    print("[INFO] Making predictions...")
     prediction_proba = predictor.predict_proba(X_test)
 
-    alpha = 0.9
+    # Convert probabilities to class labels
+    alpha = config['parameters']['alpha']
+    print(f"[INFO] Using decision threshold alpha = {alpha}")
     predictions = predictor.predict(prediction_proba, alpha=alpha)
 
     # Evaluate and plot confusion matrix
@@ -600,4 +657,3 @@ if __name__ == "__main__":
                                      alpha=alpha,
                                      show_misclassified=True,
                                      y_magnitude=y_magnitude_test)
-

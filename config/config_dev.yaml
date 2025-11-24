@@ -1,3 +1,6 @@
-training_length: 364  # Number of days for training
-validation_length: 63  # Number of days for validation
-testing_length: 1     # Number of days for testing
+parameters:
+  alpha: 0.5  # Decision threshold for classification
+feature_selection:
+  enabled: true # Enable feature selection
+  method: RFE  # Feature selection method
+  n_features_to_select: 20  # Number of features to select if using RFE
