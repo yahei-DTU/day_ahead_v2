@@ -49,11 +49,11 @@ from src.data_handler import DataHandler
 x_length = 10
 golden_ratio = (1 + 5 ** 0.5) / 2
 plt.rcParams['figure.figsize'] = (x_length, x_length / golden_ratio)
-plt.rcParams['font.size'] = 12
+plt.rcParams['font.size'] = 14
 plt.rcParams['axes.titlesize'] = 14
-plt.rcParams['axes.labelsize'] = 12
-plt.rcParams['xtick.labelsize'] = 12
-plt.rcParams['ytick.labelsize'] = 12
+plt.rcParams['axes.labelsize'] = 14
+plt.rcParams['xtick.labelsize'] = 14
+plt.rcParams['ytick.labelsize'] = 14
 
 color_palette_1 = {
     'black': (0, 0, 0),
@@ -358,8 +358,6 @@ class ImbalancePredictor:
             rf"($\alpha={alpha:.2f}$, Accuracy={accuracy:.1%})"
         )
         ax.set_title(title, pad=15)
-        ax.set_xlabel("First Principal Component")
-        ax.set_ylabel("Second Principal Component")
                 
         # Colorbar with custom labels
         if show_misclassified:
@@ -392,6 +390,14 @@ class ImbalancePredictor:
             ax.legend(handles=legend_handles, loc="best",
                       framealpha=0.9, fontsize=10)
         
+        # Remove top and right spines
+        ax.spines['right'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+
+        # Set axis labels
+        ax.set_xlabel('First Principal Component')
+        ax.set_ylabel('Second Principal Component')
+
         # Save figure
         project_root = Path(__file__).resolve().parents[1]
         figures_dir = project_root / "figures"
