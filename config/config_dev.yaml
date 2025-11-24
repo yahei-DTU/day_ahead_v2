@@ -1,6 +1,6 @@
 parameters:
   alpha: 0.5  # Decision threshold for classification
 feature_selection:
-  enabled: true # Enable feature selection
+  enabled: False # Enable feature selection
   method: RFE  # Feature selection method
   n_features_to_select: 20  # Number of features to select if using RFE

@@ -655,5 +655,5 @@ if __name__ == "__main__":
     predictor.plot_decision_boundary(X_test_pca, predictions,
                                      y_test,
                                      alpha=alpha,
-                                     show_misclassified=True,
+                                     show_misclassified=False,
                                      y_magnitude=y_magnitude_test)
