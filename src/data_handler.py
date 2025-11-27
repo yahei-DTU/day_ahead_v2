@@ -12,8 +12,8 @@ Contact: yahei@dtu.dk
 Dependencies: pandas, os, typing, pathlib, data_validation
 """
 
-import os
 import sys
+import os
 from pathlib import Path
 from typing import Dict, Any, Union, Optional
 import numpy as np
@@ -253,11 +253,11 @@ class DataHandler:
         if report.data_type == 'DataFrame':
             # Shape
             if report.shape:
-                print(f"\n📊 Shape: {report.shape.rows} rows, {report.shape.columns} columns")
+                print(f"\n Shape: {report.shape.rows} rows, {report.shape.columns} columns")
 
             # Memory usage by column
             if report.memory_usage:
-                print(f"\n💾 Memory Usage: {report.memory_usage.total_mb} MB")
+                print(f"\n Memory Usage: {report.memory_usage.total_mb} MB")
                 print("By Column:")
                 for col, kb in report.memory_usage.by_column_kb.items():
                     print(f"   • {col}: {kb} KB")
@@ -265,30 +265,30 @@ class DataHandler:
             # Missing values summary
             total_missing = report.missing_values.total_missing
             if total_missing > 0:
-                print(f"\n❌ Missing Values: {total_missing} total")
+                print(f"\n Missing Values: {total_missing} total")
                 print("   Columns with missing values:")
                 for col, info in report.missing_values.by_column.items():
                     print(f"   • {col}: {info.count} ({info.percentage}%)")
             else:
-                print("\n✅ Missing Values: None")
+                print("\n Missing Values: None")
             
             # Duplicates
             dup_count = report.duplicates.count
             if dup_count > 0:
                 dup_pct = report.duplicates.percentage
-                print(f"\n🔄 Duplicate Rows: {dup_count} ({dup_pct}%)")
+                print(f"\n Duplicate Rows: {dup_count} ({dup_pct}%)")
             else:
-                print("\n✅ Duplicate Rows: None")
+                print("\n Duplicate Rows: None")
             
             # Data types
             if report.data_types:
-                print("\n🏷️ Data Types:")
+                print("\n Data Types:")
                 for col, dtype in report.data_types.items():
                     print(f"   • {col}: {dtype}")
             
             # Numeric summary
             if report.numeric_summary:
-                print(f"\n🔢 Numeric Columns: {len(report.numeric_summary)}")
+                print(f"\n Numeric Columns: {len(report.numeric_summary)}")
                 for col, stats in report.numeric_summary.items():
                     if stats.negative > 0 or stats.zeros > 0:
                         print(f"   • {col}: {stats.zeros} zeros, "
@@ -296,16 +296,16 @@ class DataHandler:
 
             # Column completeness            
             if report.column_completeness:
-                print("\n✅ Column Completeness:")
+                print("\n Column Completeness:")
                 for col, pct in report.column_completeness.items():
                     print(f"   • {col}: {pct}% complete")
             
             # Message
             if report.message:
-                print(f"\nℹ️  Note: {report.message}")
+                print(f"\n Note: {report.message}")
 
         else:
-            print("⚠️  No detailed report available for non-DataFrame data.")
+            print("[WARNING] No detailed report available for non-DataFrame data.")
         print("=" * 60)
 
     def preview(self, n_rows: int = 5, show_info: bool = True) -> None:
@@ -321,39 +321,39 @@ class DataHandler:
         print("=" * 70)
         
         if self._data is None:
-            print("📋 DATA PREVIEW: Empty Instance")
+            print("DATA PREVIEW: Empty Instance")
             print("=" * 70)
-            print("❌ No data loaded. Use load_file() to load data.")
+            print("[ERROR] No data loaded. Use load_file() to load data.")
             print("=" * 70)
             return
             
-        print(f"📋 DATA PREVIEW: {self.filename}")
+        print(f"DATA PREVIEW: {self.filename}")
         print("=" * 70)
         
         if isinstance(self._data, pd.DataFrame):
             if show_info:
                 # Basic info
-                print(f"📊 Shape: {self._data.shape[0]} rows × "
+                print(f"Shape: {self._data.shape[0]} rows × "
                       f"{self._data.shape[1]} columns")
                 memory_mb = round(
                     self._data.memory_usage(deep=True).sum() / 1024 / 1024, 2
                 )
-                print(f"💾 Memory: {memory_mb} MB")
+                print(f"Memory: {memory_mb} MB")
                 
                 # Column info
-                print(f"🏷️  Columns: {list(self._data.columns)}")
-                print(f"🔢 Data Types: {dict(self._data.dtypes)}")
+                print(f"Columns: {list(self._data.columns)}")
+                print(f"Data Types: {dict(self._data.dtypes)}")
                 print()
             
             # Show head
-            print(f"📤 First {min(n_rows, len(self._data))} rows:")
+            print(f"First {min(n_rows, len(self._data))} rows:")
             print("-" * 50)
             print(self._data.head(n_rows))
             print()
             
             # Show tail if data has more than n_rows
             if len(self._data) > n_rows:
-                print(f"📥 Last {min(n_rows, len(self._data))} rows:")
+                print(f"Last {min(n_rows, len(self._data))} rows:")
                 print("-" * 50)
                 print(self._data.tail(n_rows))
                 print()
@@ -361,7 +361,7 @@ class DataHandler:
             # Basic statistics for numeric columns
             numeric_cols = self._data.select_dtypes(include=['number']).columns
             if len(numeric_cols) > 0 and show_info:
-                print("📈 Numeric Summary:")
+                print("Numeric Summary:")
                 print("-" * 50)
                 print(self._data[numeric_cols].describe())
                 print()
@@ -370,7 +370,7 @@ class DataHandler:
             if show_info:
                 missing = self._data.isnull().sum()
                 if missing.any():
-                    print("❌ Missing Values:")
+                    print("Missing Values:")
                     print("-" * 50)
                     missing_data = missing[missing > 0]
                     missing_summary = missing_data.sort_values(ascending=False)
@@ -379,7 +379,7 @@ class DataHandler:
                         print(f"   {col}: {count} ({pct}%)")
                     print()
                 else:
-                    print("✅ No missing values found")
+                    print("No missing values found")
                     print()
 
         print("=" * 70)
@@ -396,7 +396,7 @@ class DataHandler:
             first n lines if text, or None if no data loaded.
         """
         if self._data is None:
-            print("❌ No data loaded. Use load_file() to load data.")
+            print("[ERROR] No data loaded. Use load_file() to load data.")
             return None
             
         if isinstance(self._data, pd.DataFrame):
@@ -417,7 +417,7 @@ class DataHandler:
             last n lines if text, or None if no data loaded.
         """
         if self._data is None:
-            print("❌ No data loaded. Use load_file() to load data.")
+            print("[ERROR] No data loaded. Use load_file() to load data.")
             return None
             
         if isinstance(self._data, pd.DataFrame):
@@ -432,21 +432,21 @@ class DataHandler:
         """
         if self._data is None:
             print("=" * 60)
-            print("📋 Data INFO: Empty Instance")
+            print("DATA INFO: Empty Instance")
             print("-" * 40)
-            print("❌ No data loaded. Use load_file() to load data.")
+            print("[ERROR] No data loaded. Use load_file() to load data.")
             return
             
         if isinstance(self._data, pd.DataFrame):
             print("=" * 60)
-            print(f"📋 Data INFO for: {self.filename}")
+            print(f"DATA INFO for: {self.filename}")
             print("-" * 40)
             self._data.info()
         else:
             text_data = str(self._data)
             lines = text_data.split('\n')
             print("=" * 60)
-            print(f"📄 Text INFO for: {self.filename}")
+            print(f"TEXT INFO for: {self.filename}")
             print("-" * 40)
             print(f"Length: {len(text_data)} characters")
             print(f"Lines: {len(lines)}")
@@ -493,11 +493,11 @@ class DataHandler:
             DataHandler: New instance with transformed data.
         """
         if self._data is None:
-            print("❌ No data loaded. Use load_file() or set_data() first.")
+            print("[ERROR] No data loaded. Use load_file() or set_data() first.")
             return self
             
         if not isinstance(self._data, pd.DataFrame):
-            print("⚠️  Data transformation only available for DataFrame data")
+            print("[WARNING] Data transformation only available for DataFrame data")
             return self
             
         # Create a copy to avoid modifying original data
@@ -532,7 +532,7 @@ class DataHandler:
                 df = df.drop(columns=cols_to_drop, errors='ignore')
                 log.append(f"Dropped columns with >{threshold*100}% missing: {cols_to_drop}")
             else:
-                print("⚠️  drop_missing_threshold must be between 0.0 and 1.0")
+                print("[WARNING] drop_missing_threshold must be between 0.0 and 1.0")
         
         # Fill missing values
         if 'fill_missing' in kwargs:
@@ -601,11 +601,11 @@ class DataHandler:
         new_instance._data = df
         
         # Print summary
-        print("🔄 TRANSFORMATION SUMMARY:")
+        print("TRANSFORMATION SUMMARY:")
         print("-" * 40)
         for entry in log:
-            print(f"✅ {entry}")
-        print(f"📊 Final shape: {df.shape}")
+            print(f"Done: {entry}")
+        print(f"Final shape: {df.shape}")
         
         return new_instance
 
@@ -688,7 +688,7 @@ class DataHandler:
             return output_path
 
         except Exception as e:
-            print(f"❌ Error saving data: {str(e)}")
+            print(f"[ERROR] Error saving data: {str(e)}")
             raise
 
 
@@ -875,7 +875,7 @@ if __name__ == "__main__":
             actual_production_DK1.data, left_on='datetime',
             right_on='MTU', how='left').drop(columns=['MTU'])
     else:
-        print("⚠️  Warning: Duplicate MTU values found. "
+        print("[WARNING] Duplicate MTU values found. "
               "Please check the data for inconsistencies.")
 
     actual_production_DK1.info()
@@ -955,7 +955,7 @@ if __name__ == "__main__":
             actual_production_DK2.data, left_on='datetime',
             right_on='MTU', how='left').drop(columns=['MTU'])
     else:
-        print("⚠️  Warning: Duplicate MTU values found. "
+        print("[WARNING] Duplicate MTU values found. "
               "Please check the data for inconsistencies.")
 
     actual_production_DK2.info()
@@ -1036,7 +1036,7 @@ if __name__ == "__main__":
             afrr_reserves_DK1.data, left_on='datetime',
             right_on='HourUTC', how='left').drop(columns=['HourUTC'])
     else:
-        print("⚠️  Warning: Duplicate HourUTC values found. "
+        print("[WARNING] Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
     del afrr_reserves_DK1
@@ -1069,7 +1069,7 @@ if __name__ == "__main__":
             afrr_reserves_DK2.data, left_on='datetime',
             right_on='HourUTC', how='left').drop(columns=['HourUTC'])
     else:
-        print("⚠️  Warning: Duplicate HourUTC values found. "
+        print("[WARNING] Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
     afrr_reserves_DK2.info()
@@ -1151,7 +1151,7 @@ if __name__ == "__main__":
             forecasted_transfer_capacities_DK1_DE_LU.data, left_on='datetime',
             right_on='Time (UTC)', how='left').drop(columns=['Time (UTC)'])
     else:
-        print("⚠️  Warning: Duplicate Time (UTC) values found. "
+        print("[WARNING] Duplicate Time (UTC) values found. "
               "Please check the data for inconsistencies.")
 
     forecasted_transfer_capacities_DK1_DE_LU.info()
@@ -1235,7 +1235,7 @@ if __name__ == "__main__":
             forecasted_transfer_capacities_DK1_NL.data, left_on='datetime',
             right_on='Time (UTC)', how='left').drop(columns=['Time (UTC)'])
     else:
-        print("⚠️  Warning: Duplicate Time (UTC) values found. "
+        print("[WARNING] Duplicate Time (UTC) values found. "
               "Please check the data for inconsistencies.")
 
     print(forecasted_transfer_capacities_DK1_NL.info())
@@ -1340,7 +1340,7 @@ if __name__ == "__main__":
             forecast_production_DK1_onshore.data, left_on='datetime',
             right_on='HourUTC', how='left').drop(columns=['HourUTC'])
     else:
-        print("⚠️  Warning: Duplicate HourUTC values found. "
+        print("[WARNING] Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
     print(forecast_production_DK1_onshore.info())
@@ -1375,7 +1375,7 @@ if __name__ == "__main__":
             forecast_production_DK1_offshore.data, left_on='datetime',
             right_on='HourUTC', how='left').drop(columns=['HourUTC'])
     else:
-        print("⚠️  Warning: Duplicate HourUTC values found. "
+        print("[WARNING] Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
     print(forecast_production_DK1_offshore.info())
@@ -1409,7 +1409,7 @@ if __name__ == "__main__":
             forecast_production_DK1_solar.data, left_on='datetime',
             right_on='HourUTC', how='left').drop(columns=['HourUTC'])
     else:
-        print("⚠️  Warning: Duplicate HourUTC values found. "
+        print("[WARNING] Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
     forecast_production_DK1_solar.info()
@@ -1443,7 +1443,7 @@ if __name__ == "__main__":
             forecast_production_DK2_onshore.data, left_on='datetime',
             right_on='HourUTC', how='left').drop(columns=['HourUTC'])
     else:
-        print("⚠️  Warning: Duplicate HourUTC values found. "
+        print("[WARNING] Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
     print(forecast_production_DK2_onshore.info())
@@ -1477,7 +1477,7 @@ if __name__ == "__main__":
             forecast_production_DK2_offshore.data, left_on='datetime',
             right_on='HourUTC', how='left').drop(columns=['HourUTC'])
     else:
-        print("⚠️  Warning: Duplicate HourUTC values found. "
+        print("[WARNING] Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
     print(forecast_production_DK2_offshore.info())
@@ -1511,7 +1511,7 @@ if __name__ == "__main__":
             forecast_production_DK2_solar.data, left_on='datetime',
             right_on='HourUTC', how='left').drop(columns=['HourUTC'])
     else:
-        print("⚠️  Warning: Duplicate HourUTC values found. "
+        print("[WARNING] Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
     print(forecast_production_DK2_solar.info())
@@ -1582,7 +1582,7 @@ if __name__ == "__main__":
             forecast_generation_DK1.data, left_on='datetime',
             right_on='MTU', how='left').drop(columns=['MTU'])
     else:
-        print("⚠️  Warning: Duplicate MTU values found. "
+        print("[WARNING] Duplicate MTU values found. "
               "Please check the data for inconsistencies.")
 
     print(forecast_generation_DK1.info())
@@ -1652,7 +1652,7 @@ if __name__ == "__main__":
             forecast_generation_DK2.data, left_on='datetime',
             right_on='MTU', how='left').drop(columns=['MTU'])
     else:
-        print("⚠️  Warning: Duplicate MTU values found. "
+        print("[WARNING] Duplicate MTU values found. "
               "Please check the data for inconsistencies.")
 
     print(forecast_generation_DK2.info())
@@ -1728,7 +1728,7 @@ if __name__ == "__main__":
             forecast_generation_DK1.data, left_on='datetime',
             right_on='MTU (UTC)', how='left').drop(columns=['MTU (UTC)'])
     else:
-        print("⚠️  Warning: Duplicate MTU values found. "
+        print("[WARNING] Duplicate MTU values found. "
               "Please check the data for inconsistencies.")
 
     print(forecast_generation_DK1.info())
@@ -1803,7 +1803,7 @@ if __name__ == "__main__":
             forecast_generation_DK2.data, left_on='datetime',
             right_on='MTU (UTC)', how='left').drop(columns=['MTU (UTC)'])
     else:
-        print("⚠️  Warning: Duplicate MTU values found. "
+        print("[WARNING] Duplicate MTU values found. "
               "Please check the data for inconsistencies.")
 
     print(forecast_generation_DK2.info())
@@ -1904,7 +1904,7 @@ if __name__ == "__main__":
             mFRR_capacity_market_DK1.data, left_on='datetime',
             right_on='HourUTC', how='left').drop(columns=['HourUTC'])
     else:
-        print("⚠️  Warning: Duplicate HourUTC values found. "
+        print("[WARNING] Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
     print(mFRR_capacity_market_DK1.info())
@@ -1953,7 +1953,7 @@ if __name__ == "__main__":
             mFRR_capacity_market_DK2.data, left_on='datetime',
             right_on='HourUTC', how='left').drop(columns=['HourUTC'])
     else:
-        print("⚠️  Warning: Duplicate HourUTC values found. "
+        print("[WARNING] Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
     print(mFRR_capacity_market_DK2.info())
@@ -2037,7 +2037,7 @@ if __name__ == "__main__":
             actual_production_consumption_DK1.data, left_on='datetime',
             right_on='HourUTC', how='left').drop(columns=['HourUTC'])
     else:
-        print("⚠️  Warning: Duplicate HourUTC values found. "
+        print("[WARNING] Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
     print(actual_production_consumption_DK1.info())
@@ -2076,7 +2076,7 @@ if __name__ == "__main__":
             actual_production_consumption_DK2.data, left_on='datetime',
             right_on='HourUTC', how='left').drop(columns=['HourUTC'])
     else:
-        print("⚠️  Warning: Duplicate HourUTC values found. "
+        print(" [WARNING] Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
     print(actual_production_consumption_DK2.info())
@@ -2151,7 +2151,7 @@ if __name__ == "__main__":
             load_data_DK1.data, left_on='datetime',
             right_on='Time (UTC)', how='left').drop(columns=['Time (UTC)'])
     else:
-        print("⚠️  Warning: Duplicate Time (UTC) values found. "
+        print(" [WARNING] Duplicate Time (UTC) values found. "
               "Please check the data for inconsistencies.")
 
     load_data_DK1.info()
@@ -2225,7 +2225,7 @@ if __name__ == "__main__":
             load_data_DK2.data, left_on='datetime',
             right_on='Time (UTC)', how='left').drop(columns=['Time (UTC)'])
     else:
-        print("⚠️  Warning: Duplicate Time (UTC) values found. "
+        print("[WARNING] Duplicate Time (UTC) values found. "
               "Please check the data for inconsistencies.")
 
     load_data_DK2.info()
@@ -2331,7 +2331,7 @@ if __name__ == "__main__":
             imbalance_DK1.data, left_on='datetime',
             right_on='HourUTC', how='left').drop(columns=['HourUTC'])
     else:
-        print("⚠️  Warning: Duplicate HourUTC values found. "
+        print("[WARNING] Duplicate HourUTC values found. "
               "Please check the data for inconsistencies.")
 
     del imbalance_DK1
@@ -2376,6 +2376,81 @@ if __name__ == "__main__":
 
     imbalance_DK2.info()
     del imbalance_DK2
+
+    ###########################################################################
+
+    print("=" * 60)
+    print("Import target data: Enfor_DA_wind_power_forecast")
+    print("=" * 60)
+
+    # Import data and validate
+    wind_forecast = DataHandler("Enfor_DA_wind_power_forecast.csv")
+
+    # Transform data: Drop 'HourDK' column, handle missing values
+    wind_forecast = wind_forecast.transform_data(
+        drop_columns=['Time_end',
+                      'PTime',
+                      'SCADAPowerMeas'],
+        rename_columns={'Time_begin': 'HourUTC',
+                        'PowerPred': 'WindFarm_WindPowerForecast',
+                        'SettlementPowerMeas': 'WindFarm_ActualWindPower'}
+                      )
+    for col in wind_forecast.data.columns:
+        if col not in ["HourUTC", "PTime"]:
+            wind_forecast.data[col] = pd.to_numeric(wind_forecast.data[col],
+                                                errors='coerce')
+
+    wind_forecast.data["HourUTC"] = pd.to_datetime(
+        wind_forecast.data["HourUTC"], format='%Y-%m-%d %H:%M:%S', utc=True)
+
+    wind_forecast.set_data(
+        wind_forecast.data[
+            (wind_forecast.data["HourUTC"] >= pd.Timestamp("2023-01-01", tz="UTC")) &
+            (wind_forecast.data["HourUTC"] <= pd.Timestamp("2025-09-22", tz="UTC"))
+        ]
+    )
+
+    # Resolve duplicates (use latest update)
+    wind_forecast.set_data(
+        wind_forecast.data.sort_values('HourUTC').drop_duplicates(subset='HourUTC', keep='last')
+    )
+
+    # Check for duplicate HourUTC values
+    datetime_duplicates = wind_forecast.data["HourUTC"].duplicated().sum()
+    if datetime_duplicates > 0:
+        raise ValueError(
+            f"Duplicate HourUTC values found: {datetime_duplicates}")
+
+
+    if datetime_duplicates == 0:
+        # Drop columns with more than 20% missing values
+        wind_forecast = wind_forecast.transform_data(
+            drop_missing_threshold=0.1)
+
+        # Resample to hourly frequency, summing values within each hour
+        wind_forecast.set_data(wind_forecast.data
+                               .set_index("HourUTC").resample("h")
+                               .sum(min_count=1))
+
+        # Create lagged features (48 hours)
+        for col in wind_forecast.data.columns:
+            
+            wind_forecast.data[f"{col}_Lag48"] = wind_forecast.data[col].shift(48)
+
+        # Reset index to a column
+        wind_forecast.set_data(wind_forecast.data.reset_index())
+
+        # Merge with features_df
+        features_df = features_df.merge(
+            wind_forecast.data, left_on='datetime',
+            right_on='HourUTC', how='left').drop(columns=['HourUTC'])
+    else:
+        print("[WARNING] Duplicate HourUTC values found. "
+              "Please check the data for inconsistencies.")
+
+    wind_forecast.info()
+    del wind_forecast
+
 
     ###########################################################################
 
