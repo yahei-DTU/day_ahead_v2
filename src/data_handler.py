@@ -2246,10 +2246,9 @@ if __name__ == "__main__":
     # Transform data: Drop 'HourDK' column, handle missing values
     imbalance = imbalance.transform_data(
         drop_columns=['HourDK',
-                      'mFRRUpActBal',
-                      'mFRRDownActBal',
                       'mFRRUpActSpec',
                       'mFRRDownActSpec',
+                      'ImbalanceMWh',
                       'ImbalancePriceDKK',
                       'BalancingPowerPriceUpDKK',
                       'BalancingPowerPriceDownDKK']
@@ -2271,16 +2270,25 @@ if __name__ == "__main__":
     # add column with imbalance direction, 1 if surplus, -1 if deficit
     imbalance.data['ImbalanceDirection'] = (
         imbalance.data.apply(
-            lambda row: 1 if row['ImbalancePriceEUR'] == row['BalancingPowerPriceDownEUR']
+            lambda row: 0 if (row['ImbalancePriceEUR'] == row['BalancingPowerPriceDownEUR'] and
+                            row['ImbalancePriceEUR'] == row['BalancingPowerPriceUpEUR'])
+            else 1 if row['ImbalancePriceEUR'] == row['BalancingPowerPriceDownEUR']
             else -1 if row['ImbalancePriceEUR'] == row['BalancingPowerPriceUpEUR']
             else 0,
             axis=1
         )
     )
 
+    # add column with imbalance in MWh
+    imbalance.data['ImbalanceMWh'] = (imbalance.data['mFRRDownActBal'] -
+                                      imbalance.data['mFRRUpActBal'])
+
     # drop BalancingPowerPriceDownEUR and BalancingPowerPriceUpEUR
     imbalance = imbalance.transform_data(
-        drop_columns=['BalancingPowerPriceDownEUR', 'BalancingPowerPriceUpEUR']
+        drop_columns=['BalancingPowerPriceDownEUR',
+                      'BalancingPowerPriceUpEUR',
+                      'mFRRUpActBal',
+                      'mFRRDownActBal']
     )
 
     # Split data into DK1 and DK2
@@ -2322,6 +2330,9 @@ if __name__ == "__main__":
         # Create lagged features (48 hours)
         for col in imbalance_DK1.data.columns:
             imbalance_DK1.data[f"{col}_Lag48"] = imbalance_DK1.data[col].shift(48)
+        
+        # change type to category
+        imbalance_DK1.data['ImbalanceDirection_DK1'] = imbalance_DK1.data['ImbalanceDirection_DK1'].astype('string')
 
         # Reset index to a column
         imbalance_DK1.set_data(imbalance_DK1.data.reset_index())
@@ -2362,6 +2373,9 @@ if __name__ == "__main__":
         # Create lagged features (48 hours)
         for col in imbalance_DK2.data.columns:
             imbalance_DK2.data[f"{col}_Lag48"] = imbalance_DK2.data[col].shift(48)
+
+        # change type to category
+        imbalance_DK2.data['ImbalanceDirection_DK2'] = imbalance_DK2.data['ImbalanceDirection_DK2'].astype('string')
 
         # Reset index to a column
         imbalance_DK2.set_data(imbalance_DK2.data.reset_index())

@@ -1,19 +1,6 @@
 [tool.pylint.format]
 max-line-length = 100
 
-[tool.black]
-line-length = 100
-
-[tool.isort]
-line_length = 100
-profile = "black"
-
-[tool.flake8]
-max-line-length = 100
-extend-ignore = [
-    "E203",  # whitespace before ':', conflicts with Black
-    "W503",  # line break before binary operator, also conflicts with Black
-]
 exclude = [
     "__pycache__",
     ".venv",

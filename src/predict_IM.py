@@ -42,45 +42,7 @@ from matplotlib.colors import TwoSlopeNorm, ListedColormap
 from matplotlib.lines import Line2D
 import yaml
 from src.data_handler import DataHandler
-
-
-###########################################################################
-# Plotting settings
-x_length = 10
-golden_ratio = (1 + 5 ** 0.5) / 2
-plt.rcParams['figure.figsize'] = (x_length, x_length / golden_ratio)
-plt.rcParams['font.size'] = 14
-plt.rcParams['axes.titlesize'] = 14
-plt.rcParams['axes.labelsize'] = 14
-plt.rcParams['xtick.labelsize'] = 14
-plt.rcParams['ytick.labelsize'] = 14
-
-color_palette_1 = {
-    'black': (0, 0, 0),
-    'orange': (230, 159, 0),
-    'sky_blue': (86, 180, 233),
-    'bluish_green': (0, 158, 115),
-    'yellow': (240, 228, 66),
-    'blue': (0, 114, 178),
-    'vermillion': (213, 94, 0),
-    'reddish_purple': (204, 121, 167)
-}
-# Normalize to 0-1 range for matplotlib
-color_palette_1 = {name: (r/255, g/255, b/255)
-                   for name, (r, g, b) in color_palette_1.items()}
-# Color palette 2 (colorblind-friendly) from S. Bolognani
-color_palette_2 = {
-    'blue': (68, 119, 170),
-    'cyan': (102, 204, 238),
-    'green': (34, 136, 51),
-    'yellow': (204, 187, 68),
-    'red': (238, 102, 119),
-    'purple': (170, 51, 119),
-    'grey': (187, 187, 187)
-}
-color_palette_2 = {name: (r/255, g/255, b/255)
-                   for name, (r, g, b) in color_palette_2.items()}
-############################################################################
+from utils.plot_settings import color_palette_1, color_palette_2, apply_plot_settings
 
 
 class ImbalancePredictor:
@@ -251,6 +213,52 @@ class ImbalancePredictor:
 
         return pca_df
     
+    def plot_label_distribution(self, y_pred: pd.Series) -> None:
+        """
+        Plot the distribution of predicted labels.
+
+        Args:
+            y_pred: Series with predicted labels.
+        """
+        apply_plot_settings()
+        label_counts = y_pred.value_counts().sort_index()
+        labels = label_counts.index.tolist()
+        counts = label_counts.values.tolist()
+
+        fig, ax = plt.subplots()
+        bars = ax.bar(labels, counts, color=[
+            color_palette_1["reddish_purple"],
+            color_palette_1["orange"],
+            color_palette_1["bluish_green"]
+        ])
+        
+        # Add counts above bars
+        for bar in bars:
+            height = bar.get_height()
+            ax.annotate(f'{height}',
+                        xy=(bar.get_x() + bar.get_width() / 2, height),
+                        xytext=(0, 3),  # 3 points vertical offset
+                        textcoords="offset points",
+                        ha='center', va='bottom')
+
+        ax.set_xticks(labels)
+        ax.set_xticklabels(['-1 (Deficit)', '0 (Uncertain)', '1 (Surplus)'])
+        ax.set_ylabel('Count')
+        ax.set_title('Distribution of Predicted Imbalance Directions')
+
+        # Save figure
+        project_root = Path(__file__).resolve().parents[1]
+        figures_dir = project_root / "figures"
+        figures_dir.mkdir(exist_ok=True)
+        
+        plt.tight_layout()
+        plt.savefig(
+            figures_dir / "predicted_label_distribution.pdf",
+            dpi=300,
+            bbox_inches="tight"
+        )
+        plt.close()
+
     def plot_decision_boundary(self, X_pca: pd.DataFrame,
                                y_pred: pd.Series, y_true: pd.Series,
                                alpha: float, show_misclassified: bool,
@@ -266,7 +274,7 @@ class ImbalancePredictor:
             show_misclassified: Whether to highlight misclassified points.
             y_magnitude: Series with imbalance magnitudes for marker sizing.
         """
-        plt.style.use('seaborn-v0_8-colorblind')
+        apply_plot_settings()
         fig, ax = plt.subplots()
         # Align predictions with PCA dataframe index
         preds_aligned = y_pred.loc[X_pca.index]
