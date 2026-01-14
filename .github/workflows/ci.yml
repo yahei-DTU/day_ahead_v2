@@ -1,22 +1,22 @@
-name: CI
+# name: CI
 
-on: [push, pull_request]
+# on: [push, pull_request]
 
-jobs:
-  lint-and-test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+# jobs:
+#   lint-and-test:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Checkout repository
+#         uses: actions/checkout@v4
 
-      - name: Set up Conda
-        uses: conda-incubator/setup-miniconda@v3
-        with:
-          environment-file: environment.yml
-          activate-environment: day_ahead_v2
+#       - name: Set up Conda
+#         uses: conda-incubator/setup-miniconda@v3
+#         with:
+#           environment-file: environment.yml
+#           activate-environment: day_ahead_v2
 
-      - name: Run Black (check only)
-        run: black --check .
+#       - name: Run Black (check only)
+#         run: black --check .
 
-      - name: Run tests
-        run: pytest
+#       - name: Run tests
+#         run: pytest

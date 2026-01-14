@@ -616,6 +616,11 @@ if __name__ == "__main__":
     print("[INFO] Preprocessing features...")
     X_processed = predictor.preprocess(X.data)
 
+    print(X_processed.head())
+    print(y_label.head())
+
+    sys.exit(0)
+
     # Split into train and test
     X_train, X_test, y_train, y_test = train_test_split(
         X_processed,

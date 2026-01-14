@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import f_oneway
+from sklearn.feature_selection import mutual_info_regression, mutual_info_classif
 from tabulate import tabulate
 from src.data_handler import DataHandler
 from utils.plot_settings import color_palette_1, color_palette_2
@@ -209,7 +210,6 @@ class DescriptiveAnalysis:
 
         return pd.DataFrame(results)
 
-
     def correlation_matrix(self, cols: Sequence[str] | None = None) -> pd.DataFrame:
         """
         Computes the correlation matrix for the dataset.
@@ -230,6 +230,22 @@ class DescriptiveAnalysis:
 
         return self.data[numerical_columns].corr()
 
+    def mutual_information(self, target_col: str, feature_col: Sequence[str] | None = None):
+        """
+        Placeholder for mutual information calculation between features and target.
+
+        Args:
+            target_col (str): The target column.
+            feature_col (Sequence[str] | None): Optional subset of feature columns.
+                If None, all numerical columns are used.
+        """
+        
+
+
+    
+    def calculate_shap():
+        pass
+    
     def plot_correlation_heatmap(self, output_dir: str | None, cols: Sequence[str] | None = None
                                  ) -> None:
         """
@@ -410,7 +426,7 @@ if __name__ == "__main__":
 
     # Compute and print correlation matrix
     corr_matrix = descriptive_analyzer.correlation_matrix()
-    print("\nCorrelation Matrix:")
+
     # Print the 30 columns with highest absolute correlation to ImbalanceDirection_DK1
     if "ImbalanceMWh_DK1" not in corr_matrix.index:
         print("ImbalanceMWh_DK1 not found in correlation matrix.")
@@ -426,11 +442,53 @@ if __name__ == "__main__":
         print("Top 30 columns by absolute correlation with ImbalanceMWh_DK1:")
         # Build a table and print it using tabulate
         top30_df = top30_original.rename_axis('column').reset_index(name='correlation')
-        print(tabulate(top30_df.values, headers=top30_df.columns, tablefmt='github', floatfmt=".6f"))
+        print(tabulate(
+            top30_df.values, headers=top30_df.columns, tablefmt='github', floatfmt=".6f"
+            ))
 
     # Compute ANOVA test
     anova_stats = descriptive_analyzer.anova_test(
         target_col="ImbalanceDirection_DK1"
         )
     print("\nANOVA Test Results:")
-    print(tabulate(anova_stats.sort_values('F_statistic', ascending=False).values, headers=anova_stats.columns, tablefmt='github', floatfmt=".6f"))
+    print(tabulate(anova_stats.sort_values('F_statistic', ascending=False).values,
+                   headers=anova_stats.columns, tablefmt='github', floatfmt=".6f"))
+    
+    # Compute correlations for extreme events: lowest 10% and highest 90% of ImbalanceMWh_DK1
+    p10 = imbalance_data.data['ImbalanceMWh_DK1'].quantile(0.05)
+    p90 = imbalance_data.data['ImbalanceMWh_DK1'].quantile(0.95)
+    extreme_data = imbalance_data.data[
+        (imbalance_data.data['ImbalanceMWh_DK1'] <= p10) |
+        (imbalance_data.data['ImbalanceMWh_DK1'] >= p90)
+    ]
+
+    extreme_analyzer = DescriptiveAnalysis(extreme_data)
+
+    extreme_corr_matrix = extreme_analyzer.correlation_matrix()
+
+    # Print the 30 columns with highest absolute correlation to ImbalanceDirection_DK1
+    if "ImbalanceMWh_DK1" not in extreme_corr_matrix.index:
+        print("ImbalanceMWh_DK1 not found in correlation matrix.")
+    else:
+        top_abs = (
+            extreme_corr_matrix.loc["ImbalanceMWh_DK1"]
+            .drop(labels=["ImbalanceMWh_DK1"], errors="ignore")
+            .abs()
+            .sort_values(ascending=False)
+            .head(30)
+        )
+        top30_original = extreme_corr_matrix.loc["ImbalanceMWh_DK1", top_abs.index]
+        print("Top 30 columns by absolute correlation with ImbalanceMWh_DK1:")
+        # Build a table and print it using tabulate
+        top30_df = top30_original.rename_axis('column').reset_index(name='correlation')
+        print(tabulate(
+            top30_df.values, headers=top30_df.columns, tablefmt='github', floatfmt=".6f"
+            ))
+
+    # Compute ANOVA test
+    anova_stats = extreme_analyzer.anova_test(
+        target_col="ImbalanceDirection_DK1"
+        )
+    print("\nANOVA Test Results:")
+    print(tabulate(anova_stats.sort_values('F_statistic', ascending=False).values,
+                   headers=anova_stats.columns, tablefmt='github', floatfmt=".6f"))

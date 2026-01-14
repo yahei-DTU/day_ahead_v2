@@ -1,0 +1,61 @@
+[build-system]
+requires = ["uv_build>=0.9.22,<0.10.0"]
+build-backend = "uv_build"
+
+[project]
+name = "day_ahead_v2"
+version = "2.0.0"
+description = ""
+authors = [
+  { name = "yahei-DTU", email = "yahei@dtu.dk" },
+]
+
+keywords = ["machine learning", "MLOps"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+]
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy",
+    "pandas",
+    "matplotlib",
+    "scipy",
+    "scikit-learn",
+    "tabulate",
+    "requests",
+    "mypy"
+]
+
+[dependency-groups]
+dev = [
+    "coverage==7.6.9",
+    "invoke==2.2.0",
+    "mkdocs-material==9.4.6",
+    "mkdocs==1.6.1",
+    "pre-commit==4.1.0",
+    "pytest==8.3.4",
+    "ruff==0.14.11",
+    "mkdocstrings-python==1.12.2",
+]
+
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu" },
+]
+torchvision = [
+    { index = "pytorch-cpu" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.ruff]
+line-length = 120
+
+[tool.coverage.run]
+omit = ["tests/*"]
