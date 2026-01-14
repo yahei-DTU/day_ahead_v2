@@ -17,7 +17,7 @@ def print_config(cfg: DictConfig, resolve: bool = True, save: bool = False) -> N
     print(OmegaConf.to_yaml(cfg))
     
     if save:
-        OmegaConf.save(cfg, Path(hydra.utils.get_original_cwd()) / "outputs/config.yaml")
+        OmegaConf.save(cfg, Path(hydra.utils.get_original_cwd()) / "reports/config.yaml")
 
 def get_project_root() -> Path:
     """Return absolute project root."""

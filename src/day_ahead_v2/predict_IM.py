@@ -38,12 +38,14 @@ from sklearn.metrics import (
     roc_curve
 )
 import hydra
+from omegaconf import DictConfig
 from tabulate import tabulate
 from matplotlib.colors import TwoSlopeNorm, ListedColormap
 from matplotlib.lines import Line2D
 import yaml
-from src.data_handler import DataHandler
+from src.day_ahead_v2.data_handler import DataHandler
 from utils.plot_settings import color_palette_1, color_palette_2, apply_plot_settings
+from utils.config import print_config, resolve_config
 
 
 class ImbalancePredictor:
@@ -52,12 +54,12 @@ class ImbalancePredictor:
     Subclasses must implement `_load_model()`.
     """
 
-    def __init__(self, **model_params):
+    def __init__(self, **model_params) -> None:
         self.model_params = model_params
         self.model = self._load_model()
         self.pca = None
 
-    def _load_model(self):
+    def _load_model(self) -> Any:
         """
         Subclasses must override this method to load the specific model.
         """
@@ -550,8 +552,14 @@ class BartPredictor(ImbalancePredictor):
     def _load_model(self):  # pragma: no cover - placeholder
         return None
 
-@hydra.main(config_name="config_dev.yaml", config_path=None)
 
+@hydra.main(config_path="../conf", config_name="config", version_base=None)
+def train_model(cfg: DictConfig) -> None:
+    cfg = resolve_config(cfg)  # Handle ${oc.env:PROJECT_ROOT}
+    print_config(cfg, save=True)
+    
+    # Access: cfg.model.lstm.hidden_size, cfg.datasets.school_loads.filepath
+    # ...
 
 
 
