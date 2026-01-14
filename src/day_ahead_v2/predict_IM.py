@@ -37,6 +37,7 @@ from sklearn.metrics import (
     roc_auc_score,
     roc_curve
 )
+import hydra
 from tabulate import tabulate
 from matplotlib.colors import TwoSlopeNorm, ListedColormap
 from matplotlib.lines import Line2D
@@ -549,13 +550,19 @@ class BartPredictor(ImbalancePredictor):
     def _load_model(self):  # pragma: no cover - placeholder
         return None
 
+@hydra.main(config_name="config_dev.yaml", config_path=None)
+
+
+
 
 if __name__ == "__main__":
     # Load configuration
     project_root = Path(__file__).resolve().parents[1]
-    config_path = project_root / "config" / "config_dev.yaml"
-    with open(config_path, 'r') as file:
-        config = yaml.safe_load(file)
+    config_path = project_root / "configs"
+    @hydra.main(config_name="config_dev.yaml", config_path=config_path)
+    def main(config: Dict[str, Any]) -> None:
+        print("[INFO] Starting imbalance prediction...")
+
 
     # Import features
     imbalance_data = DataHandler("imbalance_data.parquet",

@@ -1,0 +1,7 @@
+type: pandas.ParquetDataSet  
+filepath: "data/processed/imbalance_data.parquet"
+load_args:
+  engine: "pyarrow"
+save_args:
+  engine: "pyarrow"
+
