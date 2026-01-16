@@ -16,7 +16,7 @@ The directory structure of the project looks like this:
 │   │   └── imbalance_data.yaml
 │   ├── experiments/
 │   │   └── experiment_dev.yaml
-│   ├── datasets/
+│   ├── models/
 │   │   └── logistic_regression.yaml
 ├── data/                     # Data directory
 │   ├── processed

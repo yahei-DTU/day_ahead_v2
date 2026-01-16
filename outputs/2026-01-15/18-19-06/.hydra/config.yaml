@@ -1,0 +1,29 @@
+datasets:
+  type: pandas.ParquetDataSet
+  filepath: data/processed/imbalance_data.parquet
+  load_args:
+    engine: pyarrow
+  save_args:
+    engine: pyarrow
+models:
+  model_parameters:
+    C: 1.0
+    l1_ratio: 1
+    solver: saga
+    max_iter: 10000
+    class_weight: balanced
+  feature_selection:
+    enabled: false
+    method: RFE
+    n_features_to_select: 20
+experiments:
+  seed: 42
+  metrics:
+  - mae
+  - rmse
+  max_runs: 10
+  early_stopping: true
+  patience: 5
+  alpha: 0.7
+  train_length: 90
+  test_length: 1

@@ -1,5 +1,10 @@
-seed: 42
+# Experiment configuration for development
 metrics: ["mae", "rmse"]  # For load forecasting eval
 max_runs: 10
 early_stopping: true
 patience: 5
+
+# Train parameters
+alpha: 0.7 # Decision threshold for classification
+train_length: 90 # Days of training
+test_length: 1 # Days of testing

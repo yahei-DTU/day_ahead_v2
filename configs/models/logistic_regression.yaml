@@ -1,7 +1,9 @@
-parameters:
-  alpha: 0.7 # Decision threshold for classification
-  train_length: 90 # Days of training
-  test_length: 1 # Days of testing
+model_parameters:
+  C: 1.0 # Inverse of regularization strength
+  l1_ratio: 1  # Elastic net mixing parameter, with 1 being L1 penalty
+  solver: saga # Algorithm to use in the optimization problem
+  max_iter: 10000 # Maximum number of iterations
+  class_weight: balanced # Weights associated with classes
 
 feature_selection:
   enabled: False # Enable feature selection

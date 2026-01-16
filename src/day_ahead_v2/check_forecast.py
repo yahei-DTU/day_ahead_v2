@@ -1,7 +1,7 @@
 import sys
 import pandas as pd
 import matplotlib.pyplot as plt
-from src.data_handler import DataHandler
+from src.day_ahead_v2.data_handler import DataHandler
 
 if __name__ == "__main__":
     # Set up data handler for wind power forecast data

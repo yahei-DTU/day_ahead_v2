@@ -1,0 +1,7 @@
+defaults:
+  - datasets: imbalance_data
+  - models: logistic_regression
+  - experiments: experiment_dev
+  - _self_
+
+seed: 42
