@@ -1,7 +1,10 @@
 defaults:
   - datasets: imbalance_data
   - models: logistic_regression
-  - experiments: experiment_dev
+  - experiments: exp1
   - _self_
 
 seed: 42
+
+logging:
+  level: DEBUG

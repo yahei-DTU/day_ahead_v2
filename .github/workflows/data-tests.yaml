@@ -1,27 +1,29 @@
-name: Code linting
+name: Data Validation
 
 on:
   push:
-    branches:
-      - main
+    paths:
+      - "data/**"
+      - "tests/test_data.py"
   pull_request:
-    branches:
-      - main
+    paths:
+      - "data/**"
+      - "tests/test_data.py"
 
 jobs:
-  lint:
-    name: Code linting
+  validate-data:
+    name: Validate dataset
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-          cache: 'pip'
+          cache: pip
 
       - name: Install dependencies
         run: |
@@ -31,10 +33,5 @@ jobs:
       - name: Install package
         run: pip install -e .
 
-      - name: ruff check
-        run: |
-          ruff check .
-
-      # - name: mypy check
-      #   run: |
-      #     mypy .
+      - name: Run data validation
+        run: pytest tests/data/

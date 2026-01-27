@@ -15,15 +15,19 @@ Dependencies: pandas, typing, pathlib, data_handler
 
 from pathlib import Path
 from typing import Any, Sequence
+import logging
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import hydra
 from scipy.stats import f_oneway
+import dcor
+from sklearn.preprocessing import LabelEncoder
 from sklearn.feature_selection import mutual_info_regression, mutual_info_classif
 from tabulate import tabulate
-from src.data_handler import DataHandler
-from utils.plot_settings import color_palette_1, color_palette_2
+from day_ahead_v2.utils.plot_settings import color_palette_1, color_palette_2
 
+logger = logging.getLogger(__name__)
 
 class DescriptiveAnalysis:
     """
@@ -38,7 +42,7 @@ class DescriptiveAnalysis:
         Args:
             data (pd.DataFrame): The dataset to analyze.
         """
-        self.data = data
+        self.data: pd.DataFrame = data
 
     def compute_numerical_statistics(self, cols: Sequence[str] | None = None) -> dict[str, Any]:
         """
@@ -67,7 +71,8 @@ class DescriptiveAnalysis:
                     'mode': None,
                     'std_dev': None,
                     'variance': None,
-                    'range': None
+                    'min': None,
+                    'max': None
                 }
                 continue
 
@@ -82,9 +87,10 @@ class DescriptiveAnalysis:
                 'mode': mode_val,
                 'std_dev': col_series.std(),
                 'variance': col_series.var(),
-                'range': col_series.max() - col_series.min()
+                'min': col_series.min(),
+                'max': col_series.max()
             }
-        
+
         return statistics
 
     def compute_categorical_statistics(self, cols: Sequence[str] | None = None) -> dict[str, Any]:
@@ -125,13 +131,12 @@ class DescriptiveAnalysis:
                 'unique_values': col_series.unique().tolist(),
                 'value_counts': col_series.value_counts().to_dict()
             }
-        
+
         return categorical_stats
 
     def anova_test(self, target_col: str, feature_col: Sequence[str] | None = None) -> pd.DataFrame:
         """
-        Performs a one-way ANOVA test per feature to determine whether each
-        numerical feature differs significantly across the target categories.
+        Performs a one-way ANOVA test per feature to determine whether feature means differ significantly across the target categories.
 
         NaN values are dropped per feature (not globally).
 
@@ -140,13 +145,17 @@ class DescriptiveAnalysis:
             feature_col (Sequence[str] | None): Optional subset of numerical
                 feature columns. If None, all numerical columns are tested.
 
+        Raises:
+            ValueError: If the target column is not found in the dataset.
+            TypeError: If elements in feature_col are not strings.
+
         Returns:
             pd.DataFrame: A DataFrame with columns:
                 - 'feature'
                 - 'F_statistic'
                 - 'p_value'
-                - 'n_samples'
                 - 'eta_squared'
+                - 'n_samples'
         """
 
         if target_col not in self.data.columns:
@@ -218,6 +227,9 @@ class DescriptiveAnalysis:
             cols (Sequence[str] | None): A list of columns to include in the correlation matrix.
                 If None, includes all numerical columns.
 
+        Raises:
+            TypeError: If elements in 'cols' are not strings.
+
         Returns:
             pd.DataFrame: The correlation matrix.
         """
@@ -230,29 +242,95 @@ class DescriptiveAnalysis:
 
         return self.data[numerical_columns].corr()
 
-    def mutual_information(self, target_col: str, feature_col: Sequence[str] | None = None):
+    def mutual_information(
+        self,
+        target_col: str,
+        feature_col: Sequence[str] | None = None,
+        is_classification: bool = True,
+        random_state: int | None = 42
+    ) -> pd.DataFrame:
         """
-        Placeholder for mutual information calculation between features and target.
+        Computes mutual information between numerical features and a target.
+
+        If is_classification=True -> uses mutual_info_classif (categorical target).
+        If is_classification=False -> uses mutual_info_regression (numeric target).
+
+        NaN values are dropped per feature (not globally).
 
         Args:
             target_col (str): The target column.
             feature_col (Sequence[str] | None): Optional subset of feature columns.
                 If None, all numerical columns are used.
+            is_classification (bool): Choose classification or regression MI.
+            random_state (int | None): Random state for MI reproducibility.
+
+        Returns:
+            pd.DataFrame: A DataFrame with columns:
+                - 'feature'
+                - 'mutual_information'
+                - 'n_samples'
         """
-        
 
+        if target_col not in self.data.columns:
+            raise ValueError(f"Target column '{target_col}' not found in the dataset.")
 
-    
-    def calculate_shap():
-        pass
-    
-    def plot_correlation_heatmap(self, output_dir: str | None, cols: Sequence[str] | None = None
-                                 ) -> None:
+        numerical_columns = self.data.select_dtypes(include=[np.number]).columns
+
+        if feature_col is not None:
+            if not all(isinstance(c, str) for c in feature_col):
+                raise TypeError("All elements in 'feature_col' must be strings.")
+            numerical_columns = pd.Index([col for col in feature_col if col in numerical_columns])
+
+        results = []
+
+        for col in numerical_columns:
+            df_valid = self.data[[col, target_col]].dropna()
+            n_samples = len(df_valid)
+
+            if n_samples < 2:
+                results.append({
+                    "feature": col,
+                    "mutual_information": np.nan,
+                    "n_samples": n_samples
+                })
+                continue
+
+            X = df_valid[col].values.reshape(-1, 1)
+            y = df_valid[target_col].values
+
+            if is_classification:
+                # Encode target if needed
+                if not np.issubdtype(y.dtype, np.number):
+                    y = LabelEncoder().fit_transform(y)
+
+                mi = mutual_info_classif(
+                    X,
+                    y,
+                    discrete_features=False,
+                    random_state=random_state
+                )[0]
+            else:
+                mi = mutual_info_regression(
+                    X,
+                    y,
+                    discrete_features=False,
+                    random_state=random_state
+                )[0]
+
+            results.append({
+                "feature": col,
+                "mutual_information": mi,
+                "n_samples": n_samples
+            })
+
+        return pd.DataFrame(results)
+
+    def plot_correlation_heatmap(self, output_dir: str | None, cols: Sequence[str] | None = None) -> None:
         """
         Plots a heatmap of the correlation matrix.
 
         Args:
-            output_dir (str | None): The directory where the plot will be saved. 
+            output_dir (str | None): The directory where the plot will be saved.
                 If None, saves in the same directory as the script.
             cols (Optional[list]): A list of columns to include in the heatmap.
                 If None, includes all numerical columns.
@@ -265,14 +343,14 @@ class DescriptiveAnalysis:
 
         if not save_path.is_absolute():
             save_path = Path(__file__).resolve().parent.parent / save_path
-        
+
         save_path.mkdir(parents=True, exist_ok=True)
 
         if cols is not None:
             corr_matrix = self.correlation_matrix().loc[cols, cols]
         else:
             corr_matrix = self.correlation_matrix()
-        
+
         plt.figure()
         plt.imshow(corr_matrix, cmap='coolwarm', interpolation='nearest')
         plt.colorbar()
@@ -300,9 +378,9 @@ class DescriptiveAnalysis:
 
         if not save_path.is_absolute():
             save_path = Path(__file__).resolve().parent.parent / save_path
-        
+
         save_path.mkdir(parents=True, exist_ok=True)
-        
+
         for column in self.data.select_dtypes(include=[np.number]).columns:
             if cols is not None and column not in cols:
                 continue
@@ -353,7 +431,8 @@ class DescriptiveAnalysis:
             plt.close()
 
 
-if __name__ == "__main__":
+@hydra.main(config_path="../../configs", config_name="config_dev.yaml")
+def main(cfg):
     # Import imbalance dataset
     imbalance_data = DataHandler("imbalance_data.parquet",
                                  "data/processed")
@@ -361,8 +440,8 @@ if __name__ == "__main__":
     # Filter data between specific dates
     imbalance_data.set_data(
         imbalance_data.data[
-            (imbalance_data.data['datetime'] < '2025-01-03') &
-            (imbalance_data.data['datetime'] >= '2023-01-03')
+            (imbalance_data.data['datetime'] < cfg.experiment_parameters.end_date) &
+            (imbalance_data.data['datetime'] >= cfg.experiment_parameters.start_date)
             ]
         )
 
@@ -451,9 +530,9 @@ if __name__ == "__main__":
         target_col="ImbalanceDirection_DK1"
         )
     print("\nANOVA Test Results:")
-    print(tabulate(anova_stats.sort_values('F_statistic', ascending=False).values,
+    print(tabulate(anova_stats.sort_values('eta_squared', ascending=False).values,
                    headers=anova_stats.columns, tablefmt='github', floatfmt=".6f"))
-    
+
     # Compute correlations for extreme events: lowest 10% and highest 90% of ImbalanceMWh_DK1
     p10 = imbalance_data.data['ImbalanceMWh_DK1'].quantile(0.05)
     p90 = imbalance_data.data['ImbalanceMWh_DK1'].quantile(0.95)
@@ -490,5 +569,5 @@ if __name__ == "__main__":
         target_col="ImbalanceDirection_DK1"
         )
     print("\nANOVA Test Results:")
-    print(tabulate(anova_stats.sort_values('F_statistic', ascending=False).values,
+    print(tabulate(anova_stats.sort_values('eta_squared', ascending=False).values,
                    headers=anova_stats.columns, tablefmt='github', floatfmt=".6f"))

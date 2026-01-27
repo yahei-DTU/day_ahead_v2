@@ -1,106 +1,92 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-File name: data_handler.py
+File name: data.py
 Author: Yannick Heiser
 Created: 2025-09-19
 Version: 1.0
 Description:
     This script reads in data
-
 Contact: yahei@dtu.dk
 Dependencies: pandas, os, typing, pathlib, data_validation
 """
 
 import sys
-import os
 from pathlib import Path
-from typing import Dict, Any, Union, Optional
+import logging
+from omegaconf import DictConfig
+import hydra
+from typing import Dict, Any
 import numpy as np
 import pandas as pd
-
 import openmeteo_requests
 import requests_cache
 from retry_requests import retry
-from src.data_validation import (
-    ValidationReport, ShapeInfo, MissingValuesInfo,
-    MissingColumnInfo, DuplicateInfo, MemoryUsageInfo,
-    NumericSummaryStats
+from day_ahead_v2.utils.data_validation import (
+    ValidationReport, ShapeInfo, MissingValuesInfo, MissingColumnInfo,
+    DuplicateInfo, MemoryUsageInfo, NumericSummaryStats
 )
 
+# Initialize logger
+logger = logging.getLogger(__name__)
 
 class DataHandler:
     """
-    A class to import data from various file formats into a pandas DataFrame.
-    Supports CSV, Excel, JSON, and Parquet files.
-    If the file format is not recognized, it reads the file as plain text.
-    Can also be created as an empty instance without any file.
+    Load data from common file formats into a pandas DataFrame.
+
+    Supports: CSV, Excel, JSON, Parquet.
+
+    Can be instantiated empty (no file loaded), or with a filename to auto-load.
 
     Attributes:
-        filename (Optional[str]): The name of the file to import. If None,
-            creates an empty instance.
-        arguments (Dict[str, Any]): Additional arguments to pass to the
-            pandas read function.
-        data (Union[pd.DataFrame, str, None]): The loaded data as a pandas DataFrame.
+        filename (str | None): The file name loaded or to be loaded.
+        filepath (str | None): Directory path containing the file.
+        arguments (dict[str, Any]): Extra kwargs forwarded to pandas read_* functions.
+        _data (pd.DataFrame): Loaded data (DataFrame).
     """
 
-    def __init__(self, filename: Optional[str] = None, filepath: Optional[str] = None, **kwargs: Any):
+    def __init__(self, filename: str | None = None, filepath: str | None = None, **kwargs: Any):
         """
-        Initialize DataHandler with optional filename and pandas arguments.
-        
+        Initialize a DataHandler.
+
         Args:
-            filename (Optional[str]): The name of the file to import.
-            filepath (Optional[str]): The path to the directory containing the file from repo directory. If None, defaults to 'data/raw'.
-            **kwargs: Additional arguments to pass to pandas read functions.
+            filename (str | None): Name of the file to load. If None, no file is loaded.
+            filepath (str | None): Directory path containing the file. If None, no file is loaded.
+            **kwargs: Extra arguments forwarded to pandas read_* functions.
         """
-        self.filename: Optional[str] = filename
-        self.filepath: Optional[str] = filepath or 'data/raw'
+        self.filename: str | None = filename
+        self.filepath: str | None = filepath
         self.arguments: Dict[str, Any] = kwargs
-        if self.filename is not None:
-            self._data = self._load_data()
+        if self.filename is not None and self.filepath is not None:
+            self._data: pd.DataFrame = self._load_data()
         else:
-            self._data = pd.DataFrame()
+            self._data: pd.DataFrame = pd.DataFrame()
 
     @property
-    def data(self) -> Union[pd.DataFrame]:
+    def data(self) -> pd.DataFrame:
         """
         Access the loaded data.
 
         Returns:
-            Union[pd.DataFrame]: The loaded data as a pandas DataFrame for
+            pd.DataFrame: The loaded data as a pandas DataFrame for
             supported formats, or an empty DataFrame if no file was loaded.
         """
         return self._data
 
-    def _load_data(self) -> Union[pd.DataFrame]:
-        """
-        Load data from the specified file into a pandas DataFrame.
-
-        Raises:
-            FileNotFoundError: If the file is not found.
-            ValueError: If no filename was provided.
-            ValueError: If the file format is unsupported.
-
-        Returns:
-            Union[pd.DataFrame, str]: The loaded data as a DataFrame or
-            plain text.
-        """
-        if self.filename is None:
-            raise ValueError("No filename provided. Cannot load data.")
-        data_path = Path(self.filepath or '') / self.filename
+    def _load_data(self) -> pd.DataFrame:
+        """Load data from the specified file into a pandas DataFrame."""
+        data_path = Path(self.filepath) / self.filename
         if not data_path.is_absolute():
             data_path = Path(__file__).resolve().parent.parent / data_path
-        print(f"Loading data from: {data_path}")
+        logger.info("Loading data from: %s", data_path)
 
         # Check if file exists
         if not data_path.is_file():
             dir_path = data_path.parent
-            raise FileNotFoundError(
-                f"File '{self.filename}' not found in '{dir_path}'"
-            )
+            raise FileNotFoundError(f"File '{self.filename}' not found in '{dir_path}'")
 
         # Determine file extension and use appropriate pandas reader
-        file_extension = os.path.splitext(self.filename)[1].lower()
+        file_extension = Path(self.filename).suffix.lower()
         if file_extension == '.csv':
             return pd.read_csv(data_path, **self.arguments)
         elif file_extension in ['.xlsx', '.xls']:
@@ -108,522 +94,372 @@ class DataHandler:
         elif file_extension == '.json':
             return pd.read_json(data_path, **self.arguments)
         elif file_extension == '.parquet':
-            engines = ['pyarrow', 'fastparquet']
-            for engine in engines:
-                try:
-                    return pd.read_parquet(data_path, engine=engine, **self.arguments)
-                except Exception as e:
-                    print(f"Error loading parquet file with {engine}: {e}")
-            raise ValueError("Failed to read Parquet file with available engines.")
+            args = dict(self.arguments)
+            engine = args.pop("engine", None)
+            return pd.read_parquet(data_path, engine=engine, **args)
         else:
             raise ValueError(f"Unsupported file format: {file_extension}")
 
-    def load_file(self, filename: str, filepath: Optional[str] = None, **kwargs) -> None:
+    def load_file(self, filename: str, filepath: str , **kwargs) -> None:
         """
         Load data from a file after instance creation.
-        
+
         Args:
             filename (str): The name of the file to load.
-            filepath (Optional[str]): The path to the directory containing the file. If None, defaults to '../data/raw'.
+            filepath (str): The path to the directory containing the file.
             **kwargs: Additional arguments to pass to the pandas read function.
         """
-        self.filename = filename
-        self.filepath: Optional[str] = filepath or '../data/raw'
+        self.filename: str = filename
+        self.filepath: str = filepath
         self.arguments.update(kwargs)
-        self._data = self._load_data()
-    
-    def set_data(self, data: Union[pd.DataFrame, str],
-                 filename: Optional[str] = None) -> None:
+        self._data: pd.DataFrame = self._load_data()
+
+    def set_data(self, data: pd.DataFrame, filename: str | None = None) -> None:
         """
         Set data directly without loading from file.
-        
+
         Args:
-            data (Union[pd.DataFrame, str]): The data to set.
-            filename (Optional[str]): Optional filename for reference.
+            data (pd.DataFrame): The data to set.
+            filename (str | None): Optional filename for reference.
         """
-        self._data = data
+        self._data: pd.DataFrame = data
         if filename is not None:
             self.filename = filename
 
-    def validate_data(self, print_report: bool = False) -> ValidationReport:
+    def validate_data(self) -> ValidationReport:
         """
-        Validate the loaded data and return a report.
-
-        Raises:
-            NotImplementedError: If the data type is unsupported for validation.
+        Validate the loaded DataFrame and return a ValidationReport.
         """
-        if self._data is None:
+        # Check if data is loaded
+        if self._data.empty:
+            logger.warning("Empty data. No validation performed.")
             return ValidationReport(
-                data_type="NoneType",
-                message="No data loaded - empty instance"
-            )
-
-        if isinstance(self._data, pd.DataFrame):
-            # Shape
-            shape = ShapeInfo(rows=len(self._data), columns=len(self._data.columns))
-
-            # Missing values
-            missing_counts = self._data.isnull().sum()
-            missing_percentages = (missing_counts / len(self._data)) * 100
-            missing_values = MissingValuesInfo(
-                total_missing=int(missing_counts.sum()),
-                by_column={
-                    col: MissingColumnInfo(
-                        count=int(missing_counts[col]),
-                        percentage=round(missing_percentages[col], 2)
-                    )
-                    for col in self._data.columns if missing_counts[col] > 0
-                }
-            )
-
-            # Duplicates
-            dup_count = int(self._data.duplicated().sum())
-            duplicates = DuplicateInfo(
-                count=dup_count,
-                percentage=round((dup_count / len(self._data)) * 100, 2)
-            )
-
-            # Memory usage
-            memory_usage_raw = self._data.memory_usage(deep=True)
-            memory_usage = MemoryUsageInfo(
-                total_mb=round(memory_usage_raw.sum() / 1024 / 1024, 2),
-                by_column_kb={
-                    col: round(memory_usage_raw[col] / 1024, 2)
-                    for col in memory_usage_raw.index
-                }
-            )
-
-            # Numeric summary
-            numeric_summary = None
-            numeric_cols = self._data.select_dtypes(include=["number"]).columns
-            if len(numeric_cols) > 0:
-                numeric_summary = {
-                    col: NumericSummaryStats(
-                        count=int(self._data[col].count()),
-                        mean=round(self._data[col].mean(), 2),
-                        std=round(self._data[col].std(), 2),
-                        min=float(self._data[col].min()),
-                        q25=float(self._data[col].quantile(0.25)),
-                        q50=float(self._data[col].quantile(0.5)),
-                        q75=float(self._data[col].quantile(0.75)),
-                        max=float(self._data[col].max()),
-                        zeros=int((self._data[col] == 0).sum()),
-                        negative=int((self._data[col] < 0).sum())
-                    )
-                    for col in numeric_cols
-                }
-
-            # Column completeness
-            column_completeness = {
-                col: round((1 - missing_percentages[col] / 100) * 100, 2)
-                for col in self._data.columns
-            }
-
-            report = ValidationReport(
                 data_type="DataFrame",
-                shape=shape,
-                missing_values=missing_values,
-                data_types={col: str(dtype) for col, dtype in self._data
-                            .dtypes.items()},
-                duplicates=duplicates,
-                memory_usage=memory_usage,
-                numeric_summary=numeric_summary,
-                column_completeness=column_completeness  
+                shape=ShapeInfo(rows=0, columns=0),
+                missing_values=MissingValuesInfo(total_missing=0, by_column={}),
+                data_types={},
+                duplicates=DuplicateInfo(count=0, percentage=0.0),
+                memory_usage=MemoryUsageInfo(total_mb=0.0, by_column_kb={}),
+                numeric_summary={},
+                column_completeness={}
             )
-            if print_report:
-                self._print_validation_summary(report)
-            return report
-        else:
-            raise NotImplementedError("Cannot validate non-DataFrame data.")
 
-    def _print_validation_summary(self, report: ValidationReport) -> None:
-        """
-        Print a formatted summary of the data validation report.
+        # Create reference to data
+        df = self._data
 
-        Raises:
-            NotImplementedError: If the data type is unsupported for
-            validation.
-        """
+        # Shape
+        shape = ShapeInfo(rows=df.shape[0], columns=df.shape[1])
 
-        print("=" * 60)
-        print("\nData Validation Report")
-        print("=" * 60)
-        print(f"Data Type: {report.data_type}")
+        # Missing values
+        missing_counts = df.isnull().sum()
+        missing_percentages = (missing_counts / len(df)) * 100
 
-        if report.data_type == 'DataFrame':
-            # Shape
-            if report.shape:
-                print(f"\n Shape: {report.shape.rows} rows, {report.shape.columns} columns")
-
-            # Memory usage by column
-            if report.memory_usage:
-                print(f"\n Memory Usage: {report.memory_usage.total_mb} MB")
-                print("By Column:")
-                for col, kb in report.memory_usage.by_column_kb.items():
-                    print(f"   • {col}: {kb} KB")
-
-            # Missing values summary
-            total_missing = report.missing_values.total_missing
-            if total_missing > 0:
-                print(f"\n Missing Values: {total_missing} total")
-                print("   Columns with missing values:")
-                for col, info in report.missing_values.by_column.items():
-                    print(f"   • {col}: {info.count} ({info.percentage}%)")
-            else:
-                print("\n Missing Values: None")
-            
-            # Duplicates
-            dup_count = report.duplicates.count
-            if dup_count > 0:
-                dup_pct = report.duplicates.percentage
-                print(f"\n Duplicate Rows: {dup_count} ({dup_pct}%)")
-            else:
-                print("\n Duplicate Rows: None")
-            
-            # Data types
-            if report.data_types:
-                print("\n Data Types:")
-                for col, dtype in report.data_types.items():
-                    print(f"   • {col}: {dtype}")
-            
-            # Numeric summary
-            if report.numeric_summary:
-                print(f"\n Numeric Columns: {len(report.numeric_summary)}")
-                for col, stats in report.numeric_summary.items():
-                    if stats.negative > 0 or stats.zeros > 0:
-                        print(f"   • {col}: {stats.zeros} zeros, "
-                              f"{stats.negative} negative values")
-
-            # Column completeness            
-            if report.column_completeness:
-                print("\n Column Completeness:")
-                for col, pct in report.column_completeness.items():
-                    print(f"   • {col}: {pct}% complete")
-            
-            # Message
-            if report.message:
-                print(f"\n Note: {report.message}")
-
-        else:
-            print("[WARNING] No detailed report available for non-DataFrame data.")
-        print("=" * 60)
-
-    def preview(self, n_rows: int = 5, show_info: bool = True) -> None:
-        """
-        Display a quick preview of the loaded data.
-        
-        Args:
-            n_rows (int): Number of rows to display from head and tail.
-                         Default is 5.
-            show_info (bool): Whether to show data info summary.
-                             Default is True.
-        """
-        print("=" * 70)
-        
-        if self._data is None:
-            print("DATA PREVIEW: Empty Instance")
-            print("=" * 70)
-            print("[ERROR] No data loaded. Use load_file() to load data.")
-            print("=" * 70)
-            return
-            
-        print(f"DATA PREVIEW: {self.filename}")
-        print("=" * 70)
-        
-        if isinstance(self._data, pd.DataFrame):
-            if show_info:
-                # Basic info
-                print(f"Shape: {self._data.shape[0]} rows × "
-                      f"{self._data.shape[1]} columns")
-                memory_mb = round(
-                    self._data.memory_usage(deep=True).sum() / 1024 / 1024, 2
+        missing_values = MissingValuesInfo(
+            total_missing=int(missing_counts.sum()),
+            by_column={
+                col: MissingColumnInfo(
+                    count=int(missing_counts[col]),
+                    percentage=float(missing_percentages[col])
                 )
-                print(f"Memory: {memory_mb} MB")
-                
-                # Column info
-                print(f"Columns: {list(self._data.columns)}")
-                print(f"Data Types: {dict(self._data.dtypes)}")
-                print()
-            
-            # Show head
-            print(f"First {min(n_rows, len(self._data))} rows:")
-            print("-" * 50)
-            print(self._data.head(n_rows))
-            print()
-            
-            # Show tail if data has more than n_rows
-            if len(self._data) > n_rows:
-                print(f"Last {min(n_rows, len(self._data))} rows:")
-                print("-" * 50)
-                print(self._data.tail(n_rows))
-                print()
-            
-            # Basic statistics for numeric columns
-            numeric_cols = self._data.select_dtypes(include=['number']).columns
-            if len(numeric_cols) > 0 and show_info:
-                print("Numeric Summary:")
-                print("-" * 50)
-                print(self._data[numeric_cols].describe())
-                print()
-            
-            # Missing values summary
-            if show_info:
-                missing = self._data.isnull().sum()
-                if missing.any():
-                    print("Missing Values:")
-                    print("-" * 50)
-                    missing_data = missing[missing > 0]
-                    missing_summary = missing_data.sort_values(ascending=False)
-                    for col, count in missing_summary.items():
-                        pct = round((count / len(self._data)) * 100, 2)
-                        print(f"   {col}: {count} ({pct}%)")
-                    print()
-                else:
-                    print("No missing values found")
-                    print()
+                for col in missing_counts.index if missing_counts[col] > 0
+            }
+        )
 
-        print("=" * 70)
+        # Duplicates
+        dup_count = int(df.duplicated().sum())
+        duplicates = DuplicateInfo(
+            count=dup_count,
+            percentage=(dup_count / len(df)) * 100
+        )
 
-    def head(self, n: int = 5) -> Union[pd.DataFrame, str, None]:
-        """
-        Return the first n rows of the data.
+        # Memory usage
+        mem_raw = df.memory_usage(deep=True)
+        memory_usage = MemoryUsageInfo(
+            total_mb=mem_raw.sum() / 1024 / 1024,
+            by_column_kb={
+                col: mem_raw[col] / 1024
+                for col in mem_raw.index
+            }
+        )
 
-        Args:
-            n (int): Number of rows to return. Default is 5.
- 
-        Returns:
-            Union[pd.DataFrame, str, None]: First n rows if DataFrame,
-            first n lines if text, or None if no data loaded.
-        """
-        if self._data is None:
-            print("[ERROR] No data loaded. Use load_file() to load data.")
-            return None
-            
-        if isinstance(self._data, pd.DataFrame):
-            return self._data.head(n)
-        else:
-            lines = str(self._data).split('\n')
-            return '\n'.join(lines[:n])
+        # Numeric summary
+        numeric_summary = {}
+        numeric_cols = df.select_dtypes(include="number").columns
+        for col in numeric_cols:
+            numeric_summary[col] = NumericSummaryStats(
+                count=int(df[col].count()),
+                mean=float(df[col].mean()),
+                std=float(df[col].std()),
+                min=float(df[col].min()),
+                q25=float(df[col].quantile(0.25)),
+                q50=float(df[col].quantile(0.5)),
+                q75=float(df[col].quantile(0.75)),
+                max=float(df[col].max()),
+                zeros=int((df[col] == 0).sum()),
+                negative=int((df[col] < 0).sum())
+            )
 
-    def tail(self, n: int = 5) -> Union[pd.DataFrame, str, None]:
-        """
-        Return the last n rows of the data.
-        
-        Args:
-            n (int): Number of rows to return. Default is 5.
-            
-        Returns:
-            Union[pd.DataFrame, str, None]: Last n rows if DataFrame,
-            last n lines if text, or None if no data loaded.
-        """
-        if self._data is None:
-            print("[ERROR] No data loaded. Use load_file() to load data.")
-            return None
-            
-        if isinstance(self._data, pd.DataFrame):
-            return self._data.tail(n)
-        else:
-            lines = str(self._data).split('\n')
-            return '\n'.join(lines[-n:])
+        # Column completeness
+        column_completeness = {
+            col: 100 - missing_percentages[col]
+            for col in df.columns
+        }
 
-    def info(self) -> None:
-        """
-        Display concise summary information about the data.
-        """
-        if self._data is None:
-            print("=" * 60)
-            print("DATA INFO: Empty Instance")
-            print("-" * 40)
-            print("[ERROR] No data loaded. Use load_file() to load data.")
-            return
-            
-        if isinstance(self._data, pd.DataFrame):
-            print("=" * 60)
-            print(f"DATA INFO for: {self.filename}")
-            print("-" * 40)
-            self._data.info()
-        else:
-            text_data = str(self._data)
-            lines = text_data.split('\n')
-            print("=" * 60)
-            print(f"TEXT INFO for: {self.filename}")
-            print("-" * 40)
-            print(f"Length: {len(text_data)} characters")
-            print(f"Lines: {len(lines)}")
-            print(f"Type: {type(self._data).__name__}")
+        report = ValidationReport(
+            data_type="DataFrame",
+            shape=shape,
+            missing_values=missing_values,
+            data_types={col: str(dtype) for col, dtype in df.dtypes.items()},
+            duplicates=duplicates,
+            memory_usage=memory_usage,
+            numeric_summary=numeric_summary,
+            column_completeness=column_completeness
+        )
 
-    @property
-    def shape(self) -> Union[tuple, str, None]:
-        """
-        Get the shape of the data.
-        
-        Returns:
-            Union[tuple, str, None]: Shape tuple for DataFrame,
-            description for text, or None if no data loaded.
-        """
-        if self._data is None:
-            return None
-            
-        if isinstance(self._data, pd.DataFrame):
-            return self._data.shape
-        else:
-            lines = str(self._data).split('\n')
-            return f"{len(str(self._data))} characters, {len(lines)} lines"
+        # Log the report
+        report.log()
 
-    def transform_data(self, **kwargs) -> 'DataHandler':
+        return report
+
+    def transform_data(self, cfg: DictConfig | None = None) -> "DataHandler":
         """
         Apply data transformations and return a new instance.
-        
+
         Args:
-            **kwargs: Transformation options including:
-                - drop_duplicates (bool): Remove duplicate rows
-                - drop_missing_threshold (float): Drop columns with missing
-                  values above this threshold (0.0-1.0)
-                - fill_missing (str/dict): Fill missing values
-                  ('mean', 'median', 'mode', 'forward', 'backward', 'zero', 'interpolate')
-                - convert_types (dict): Convert column types
-                  {column: target_type}
-                - normalize_columns (list): Columns to normalize (0-1 scale)
-                - standardize_columns (list): Columns to standardize
-                  (z-score)
-                - drop_columns (list): Columns to drop
-                - rename_columns (dict): Rename columns {old: new}
-                
+            cfg (DictConfig | None): Configuration for transformations.
+
         Returns:
             DataHandler: New instance with transformed data.
         """
-        if self._data is None:
-            print("[ERROR] No data loaded. Use load_file() or set_data() first.")
+        if cfg is None:
+            logger.info("No transformation configuration provided. Returning original data.")
             return self
-            
+
+        # Validate input data
+        if self._data.empty:
+            logger.error("No data loaded. Transformation aborted.")
+            return self
+
         if not isinstance(self._data, pd.DataFrame):
-            print("[WARNING] Data transformation only available for DataFrame data")
+            logger.warning("Transformations only supported for pandas DataFrames.")
             return self
-            
-        # Create a copy to avoid modifying original data
+
         df = self._data.copy()
-        log = []
-        
-        # Drop columns
-        if 'drop_columns' in kwargs:
-            cols = kwargs['drop_columns']
-            df = df.drop(columns=cols, errors='ignore')
-            log.append(f"Dropped columns: {cols}")
-        
-        # Rename columns
-        if 'rename_columns' in kwargs:
-            rename_dict = kwargs['rename_columns']
-            df = df.rename(columns=rename_dict)
-            log.append(f"Renamed columns: {rename_dict}")
-        
-        # Drop duplicates
-        if kwargs.get('drop_duplicates', False):
+        log: list[str] = []
+
+        self._drop_columns(df, cfg.transform, log)
+        self._rename_columns(df, cfg.transform, log)
+        self._drop_duplicates(df, cfg.transform, log)
+        self._drop_missing_columns(df, cfg.transform, log)
+        self._fill_missing(df, cfg.transform, log)
+        self._convert_types(df, cfg.transform, log)
+        self._normalize_columns(df, cfg.transform, log)
+
+        return self._build_new_handler(df, log)
+
+    def _drop_columns(self, df: pd.DataFrame, cfg: DictConfig, log: list[str]) -> None:
+        """Drop specified columns from the DataFrame."""
+        cols = cfg.get("drop_columns")
+
+        if not cols:
+            return
+
+        existing = [c for c in cols if c in df.columns]
+        missing = [c for c in cols if c not in df.columns]
+
+        if existing:
+            df.drop(columns=existing, inplace=True)
+            log.append(f"Dropped columns: {existing}")
+
+        if missing:
+            log.append(f"Skipped missing columns: {missing}")
+
+    def _rename_columns(self, df: pd.DataFrame, cfg: DictConfig, log: list[str]) -> None:
+        rename_dict = cfg.get("rename_columns")
+
+        if not rename_dict:
+            return
+
+        existing = {k: v for k, v in rename_dict.items() if k in df.columns}
+        missing = [k for k in rename_dict.keys() if k not in df.columns]
+
+        if existing:
+            df.rename(columns=existing, inplace=True)
+            log.append(f"Renamed columns: {existing}")
+
+        if missing:
+            log.append(f"Skipped missing columns for renaming: {missing}")
+
+    def _drop_duplicates(self, df: pd.DataFrame, cfg: DictConfig, log: list[str]) -> None:
+        """Drop duplicate rows from the DataFrame."""
+        if cfg.get("drop_duplicates", False):
             original_rows = len(df)
-            df = df.drop_duplicates()
+            df.drop_duplicates(inplace=True)
             removed = original_rows - len(df)
             log.append(f"Removed {removed} duplicate rows")
 
-        # Drop columns with high missing values
-        if 'drop_missing_threshold' in kwargs:
-            threshold = kwargs['drop_missing_threshold']
-            if 0.0 <= threshold <= 1.0:
-                missing_pct = df.isnull().mean()
-                cols_to_drop = missing_pct[missing_pct > threshold].index.tolist()
-                df = df.drop(columns=cols_to_drop, errors='ignore')
+    def _drop_missing_columns(self, df: pd.DataFrame, cfg: DictConfig, log: list[str]) -> None:
+        """Drop columns with high missing value percentages."""
+        threshold = cfg.get("drop_missing_threshold")
+
+        if threshold is None:
+            return
+
+        if 0.0 <= threshold <= 1.0:
+            missing_pct = df.isnull().mean()
+            cols_to_drop = missing_pct[missing_pct > threshold].index.tolist()
+            if cols_to_drop:
+                df.drop(columns=cols_to_drop, inplace=True)
                 log.append(f"Dropped columns with >{threshold*100}% missing: {cols_to_drop}")
             else:
-                print("[WARNING] drop_missing_threshold must be between 0.0 and 1.0")
-        
-        # Fill missing values
-        if 'fill_missing' in kwargs:
-            method = kwargs['fill_missing']
-            if method == 'mean':
-                numeric_cols = df.select_dtypes(include=['number']).columns
-                df[numeric_cols] = df[numeric_cols].fillna(
-                    df[numeric_cols].mean()
-                )
-            elif method == 'median':
-                numeric_cols = df.select_dtypes(include=['number']).columns
-                df[numeric_cols] = df[numeric_cols].fillna(
-                    df[numeric_cols].median()
-                )
-            elif method == 'mode':
-                for col in df.columns:
-                    mode_val = df[col].mode()
-                    if not mode_val.empty:
-                        df[col] = df[col].fillna(mode_val[0])
-            elif method == 'forward':
-                df = df.fillna(method='ffill')
-            elif method == 'backward':
-                df = df.fillna(method='bfill')
-            elif method == 'zero':
-                df = df.fillna(0)
-            elif method == 'interpolate':
-                df = df.interpolate()
-            log.append(f"Filled missing values using: {method}")
-        
-        # Convert types
-        if 'convert_types' in kwargs:
-            type_dict = kwargs['convert_types']
-            for col, dtype in type_dict.items():
-                if col in df.columns:
-                    try:
-                        df[col] = df[col].astype(dtype)
-                        log.append(f"Converted {col} to {dtype}")
-                    except Exception as e:
-                        log.append(f"Failed to convert {col}: {str(e)[:30]}")
-        
-        # Normalize columns
-        if 'normalize_columns' in kwargs:
-            cols = kwargs['normalize_columns']
-            for col in cols:
-                if col in df.columns and df[col].dtype in ['int64', 'float64']:
+                log.append(f"No columns exceeded missing threshold ({threshold*100}%)")
+        else:
+            logger.warning("drop_missing_threshold must be between 0.0 and 1.0")
+
+    def _fill_missing(self, df: pd.DataFrame, cfg: DictConfig, log: list[str]) -> None:
+        """Fill missing values using specified method."""
+        method = cfg.get("fill_missing", {}).get("method")
+        limit = cfg.get("fill_missing", {}).get("limit", None)
+
+        if not method:
+            return
+
+        if method in {"mean", "median", "interpolate"}:
+            numeric_cols = df.select_dtypes(include="number").columns
+            if numeric_cols.empty:
+                log.append(f"Skipped fill_missing ({method}): no numeric columns found")
+                return
+
+        if method == "mean":
+            df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].mean())
+
+        elif method == "median":
+            df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].median())
+
+        elif method == "mode":
+            for col in df.columns:
+                mode_val = df[col].mode()
+                if not mode_val.empty:
+                    df[col] = df[col].fillna(mode_val[0])
+
+        elif method == "forward":
+            df.ffill(limit=limit, inplace=True)
+
+        elif method == "backward":
+            df.bfill(limit=limit, inplace=True)
+
+        elif method == "zero":
+            df.fillna(0, inplace=True)
+
+        elif method == "interpolate":
+            if limit is None:
+                df[numeric_cols] = df[numeric_cols].interpolate()
+            else:
+                df[numeric_cols] = df[numeric_cols].interpolate(limit=limit)
+        else:
+            log.append(f"Unknown fill_missing method: {method}")
+            return
+
+        suffix = f" (limit={limit})" if limit is not None else ""
+        log.append(f"Filled missing values using: {method}{suffix}")
+
+    def _convert_types(self, df: pd.DataFrame, cfg: DictConfig, log: list[str]) -> None:
+        """Convert column data types."""
+        type_dict = cfg.get("convert_types")
+
+        if not type_dict:
+            return
+
+        existing = {col: dtype for col, dtype in type_dict.items() if col in df.columns}
+        missing = [col for col in type_dict.keys() if col not in df.columns]
+
+        for col, dtype in existing.items():
+            try:
+                df[col] = df[col].astype(dtype)
+                log.append(f"Converted {col} to {dtype}")
+            except Exception as e:
+                log.append(f"Failed to convert {col}: {str(e)[:30]}")
+
+        if missing:
+            log.append(f"Skipped missing columns for type conversion: {missing}")
+
+    def _normalize_columns(self, df: pd.DataFrame, cfg: DictConfig, log: list[str]) -> None:
+        """Normalize specified columns."""
+        cols = cfg.get("normalize", {}).get("columns")
+        method = cfg.get("normalize", {}).get("method", "zscore")
+
+        if not cols:
+            return
+
+        existing = [c for c in cols if c in df.columns]
+        missing = [c for c in cols if c not in df.columns]
+
+        for col in existing:
+            if pd.api.types.is_numeric_dtype(df[col]):
+                if method == "minmax":
                     min_val = df[col].min()
                     max_val = df[col].max()
                     if max_val != min_val:
                         df[col] = (df[col] - min_val) / (max_val - min_val)
-                        log.append(f"Normalized {col}")
-
-        if 'standardize_columns' in kwargs:
-            cols = kwargs['standardize_columns']
-            for col in cols:
-                if col in df.columns and df[col].dtype in ['int64', 'float64']:
+                        log.append(f"Normalized {col} using min-max scaling")
+                elif method == "zscore":
                     mean_val = df[col].mean()
                     std_val = df[col].std()
                     if std_val != 0:
                         df[col] = (df[col] - mean_val) / std_val
-                        log.append(f"Standardized {col}")
+                        log.append(f"Standardized {col} using z-score")
+                else:
+                    log.append(f"Unknown normalization method: {method} for column {col}")
 
-        # Create new instance
-        new_instance = DataHandler.__new__(DataHandler)
-        new_instance.filename = f"transformed_{self.filename}"
-        new_instance.arguments = self.arguments.copy()
-        new_instance._data = df
-        
-        # Print summary
-        print("TRANSFORMATION SUMMARY:")
-        print("-" * 40)
+        if missing:
+            log.append(f"Skipped missing columns for normalization: {missing}")
+
+    def _build_new_handler(self, df: pd.DataFrame, log: list[str]) -> "DataHandler":
+        """Build a new DataHandler instance from a transformed DataFrame."""
+        new_handler = DataHandler.__new__(DataHandler)
+
+        # Preserve metadata
+        new_handler.filename = (
+            f"transformed_{self.filename}"
+            if self.filename is not None
+            else None
+        )
+        new_handler.filepath = self.filepath
+        new_handler.arguments = self.arguments.copy()
+
+        # Assign transformed data
+        new_handler._data = df
+
+        # Log transformation summary
+        logger.info("Data transformation completed")
+        logger.info("Transformation steps:")
         for entry in log:
-            print(f"Done: {entry}")
-        print(f"Final shape: {df.shape}")
-        
-        return new_instance
+            logger.info("  • %s", entry)
+
+        logger.info(
+            "Final shape: %s rows, %s columns",
+            df.shape[0],
+            df.shape[1],
+        )
+
+        return new_handler
+
 
     def save(self, filename: Union[str, None] = None,
              directory: Union[str, None] = None, **kwargs) -> str:
         """
         Save the data to a file in the specified format.
-        
+
         Args:
             filename (str, optional): Name for the saved file. If None,
                 uses original filename with new format.
             directory (str, optional): Directory to save the file. If None,
                 saves to the same directory as original data.
             **kwargs: Additional arguments to pass to pandas save function.
-                
+
         Returns:
             str: Path to the saved file.
-            
+
         Raises:
             ValueError: If no data is loaded to save.
             IOError: If saving the file fails.
@@ -750,7 +586,7 @@ class OpenMeteoHandler(DataHandler):
 
         hourly_index = pd.date_range(start=start, end=end, freq='h', tz='UTC')
         hourly_data = pd.DataFrame({"datetime": hourly_index})
-        
+
         # Loop through responses and extract data
         for response in responses:
             lat = response.Latitude()
@@ -784,13 +620,24 @@ class OpenMeteoHandler(DataHandler):
                 if col != 'date'
             }
             response_df = response_df.rename(columns=rename_map)
-            
+
             # Merge response data into hourly_data
             hourly_data = hourly_data.merge(
                 response_df, left_on='datetime', right_on='date', how='left'
             ).drop(columns=['date'])
 
         return hourly_data
+
+
+@hydra.main(config_path="../../configs", config_name="config_dev")
+def main(cfg: DictConfig) -> None:
+    # Set logging level from config
+    logging.basicConfig(level=cfg.logging.level)
+
+    #
+
+
+sys.exit()
 
 if __name__ == "__main__":
     # Create an empty DataFrame with hourly datetime index
@@ -807,7 +654,7 @@ if __name__ == "__main__":
 
     # Import data and validate
     actual_production_DK1 = DataHandler()
-    
+
     actual_production_2023_DK1 = DataHandler(
         'Actual Generation per Production Type_2023 - DK1.csv')
     actual_production_2024_DK1 = DataHandler(
@@ -941,7 +788,7 @@ if __name__ == "__main__":
         actual_production_DK2.set_data(actual_production_DK2.data
                                        .set_index("MTU").resample("h")
                                        .sum(min_count=1))
-        
+
         # Create lagged features (48 hours)
         actual_production_DK2.set_data(actual_production_DK2.data.shift(48))
         actual_production_DK2.data.columns = [f"{col}_Lag48h" for col in actual_production_DK2.data.columns]
@@ -972,7 +819,7 @@ if __name__ == "__main__":
     afrr_reserves = DataHandler("AfrrReservesNordic.csv", sep=';', decimal=',')
     afrr_reserves_DK1 = DataHandler()
     afrr_reserves_DK2 = DataHandler()
-    
+
     # Transform data: Drop 'HourDK' column, handle missing values
     afrr_reserves = afrr_reserves.transform_data(
         drop_columns=['HourDK',
@@ -992,7 +839,7 @@ if __name__ == "__main__":
             afrr_reserves.data["HourUTC"] <= pd.Timestamp("2025-09-22", tz="UTC")
         ]
     )
-    
+
     # Split data into DK1 and DK2
     afrr_reserves_DK1.set_data(
         afrr_reserves.data[afrr_reserves.data["PriceArea"] == "DK1"]
@@ -1230,7 +1077,7 @@ if __name__ == "__main__":
         # Reset index to a column
         forecasted_transfer_capacities_DK1_NL.set_data(forecasted_transfer_capacities_DK1_NL.data.reset_index())
 
-        # Merge with features_df 
+        # Merge with features_df
         features_df = features_df.merge(
             forecasted_transfer_capacities_DK1_NL.data, left_on='datetime',
             right_on='Time (UTC)', how='left').drop(columns=['Time (UTC)'])
@@ -1256,7 +1103,7 @@ if __name__ == "__main__":
     forecast_production_DK2_onshore = DataHandler()
     forecast_production_DK2_offshore = DataHandler()
     forecast_production_DK2_solar = DataHandler()
-    
+
     # Transform data: Drop 'HourDK' column, handle missing values, convert MTU to datetime
     forecast_production = forecast_production.transform_data(
         drop_columns=['HourDK', 'Forecast Intraday', 'Forecast5Hour', 'Forecast1Hour',  'ForecastCurrent', 'TimestampUTC', 'TimestampDK'])
@@ -1273,7 +1120,7 @@ if __name__ == "__main__":
             forecast_production.data["HourUTC"] <= pd.Timestamp("2025-09-22", tz="UTC")
         ]
     )
-    
+
     # Split data into DK1 and DK2 and by ForecastType
     forecast_production_DK1_onshore.set_data(
         forecast_production.data[
@@ -1526,7 +1373,7 @@ if __name__ == "__main__":
 
     # Import data and validate
     forecast_generation_DK1 = DataHandler()
-    
+
     forecast_generation_2023_DK1 = DataHandler(
         'Generation Forecast - Day ahead_2023 - DK1.csv')
     forecast_generation_2024_DK1 = DataHandler(
@@ -1667,7 +1514,7 @@ if __name__ == "__main__":
 
     # Import data and validate
     forecast_generation_DK1 = DataHandler()
-    
+
     forecast_generation_2023_DK1 = DataHandler(
         'Generation Forecasts for Wind and Solar_2023 - DK1.csv')
     forecast_generation_2024_DK1 = DataHandler(
@@ -1822,7 +1669,7 @@ if __name__ == "__main__":
     mFRR_reserves_DK2_2023 = DataHandler("MfrrReservesDK2.csv", sep=';', decimal=',')
     mFRR_capacity_market_DK1 = DataHandler()
     mFRR_capacity_market_DK2 = DataHandler()
-    
+
     # Drop columns
     mFRR_capacity_market = mFRR_capacity_market.transform_data(
         drop_columns=['HourDK', 'mFRR_DownPriceDKK', 'mFRR_UpPriceDKK'])
@@ -1988,7 +1835,7 @@ if __name__ == "__main__":
             actual_production_consumption.data["HourUTC"] <= pd.Timestamp("2025-09-22", tz="UTC")
         ]
     )
-    
+
     # Split data into DK1 and DK2
     actual_production_consumption_DK1.set_data(
         actual_production_consumption.data[actual_production_consumption.data["PriceArea"] == "DK1"]
@@ -2022,7 +1869,7 @@ if __name__ == "__main__":
         actual_production_consumption_DK1.set_data(actual_production_consumption_DK1.data
                                                    .set_index("HourUTC").resample("h")
                                                    .sum(min_count=1))
-        
+
         # Create lagged features (48 hours)
         actual_production_consumption_DK1.set_data(actual_production_consumption_DK1.data.shift(48))
         actual_production_consumption_DK1.data.columns = [f"{col}_Lag48h" for col in actual_production_consumption_DK1.data.columns]
@@ -2091,7 +1938,7 @@ if __name__ == "__main__":
 
     # Import data and validate
     load_data_DK1 = DataHandler()
-    
+
     load_data_DK1_2023 = DataHandler(
         'Total Load - Day Ahead _ Actual_2023 - DK1.csv')
     load_data_DK1_2024 = DataHandler(
@@ -2138,7 +1985,7 @@ if __name__ == "__main__":
         load_data_DK1.set_data(load_data_DK1.data
                                .set_index("Time (UTC)").resample("h")
                                .sum(min_count=1))
-        
+
         # Create lagged features (48 hours)
         load_data_DK1.data["Actual Total Load [MW] - BZN|DK1_Lag48h"] = load_data_DK1.data["Actual Total Load [MW] - BZN|DK1"].shift(48)
         load_data_DK1 = load_data_DK1.transform_data(drop_columns=["Actual Total Load [MW] - BZN|DK1"])
@@ -2212,7 +2059,7 @@ if __name__ == "__main__":
         load_data_DK2.set_data(load_data_DK2.data
                                .set_index("Time (UTC)").resample("h")
                                .sum(min_count=1))
-        
+
         # Create lagged features (48 hours)
         load_data_DK2.data["Actual Total Load [MW] - BZN|DK2_Lag48h"] = load_data_DK2.data["Actual Total Load [MW] - BZN|DK2"].shift(48)
         load_data_DK2 = load_data_DK2.transform_data(drop_columns=["Actual Total Load [MW] - BZN|DK2"])
@@ -2326,11 +2173,11 @@ if __name__ == "__main__":
         imbalance_DK1.set_data(imbalance_DK1.data
                                .set_index("HourUTC").resample("h")
                                .sum(min_count=1))
-        
+
         # Create lagged features (48 hours)
         for col in imbalance_DK1.data.columns:
             imbalance_DK1.data[f"{col}_Lag48"] = imbalance_DK1.data[col].shift(48)
-        
+
         # change type to category
         imbalance_DK1.data['ImbalanceDirection_DK1'] = imbalance_DK1.data['ImbalanceDirection_DK1'].astype('string')
 
@@ -2448,7 +2295,7 @@ if __name__ == "__main__":
 
         # Create lagged features (48 hours)
         for col in wind_forecast.data.columns:
-            
+
             wind_forecast.data[f"{col}_Lag48"] = wind_forecast.data[col].shift(48)
 
         # Reset index to a column

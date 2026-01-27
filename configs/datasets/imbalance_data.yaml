@@ -1,7 +1,28 @@
-type: pandas.ParquetDataSet  
-filepath: "data/processed/imbalance_data.parquet"
+type: pandas.ParquetDataSet
+filename: imbalance_data.parquet
+filepath: "data/processed/"
 load_args:
   engine: "pyarrow"
 save_args:
   engine: "pyarrow"
 
+validation:
+  enabled: true
+  thresholds:
+    missing_warn_pct: 1.0
+    missing_fail_pct: 5.0
+    duplicate_warn_pct: 1.0
+    duplicate_fail_pct: 5.0
+
+transform:
+  drop_columns:
+    - col1
+    - col2
+  rename_columns:
+    col3: new_col3
+    col4: new_col4
+  drop_dublicates: true
+  drop_missing_threshold: 0.1
+  fill_missing:
+    method: "forward" # mean, median, mode, forward, backward, interpolate, zero
+    limit: 2 # for forward, backward and interpolate methods

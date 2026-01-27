@@ -48,12 +48,12 @@ from omegaconf import DictConfig
 
 
 @hydra.main(version_base=None, config_path="../../configs", config_name="config")
-def train_model(cfg: DictConfig) -> None:
+def main(cfg: DictConfig) -> None:
     # Your training code here
     print(cfg)
 
 if __name__ == "__main__":
-    sys.exit(train_model())
+    sys.exit(main())
 
     # Load configuration
     project_root = Path(__file__).resolve().parents[1]
@@ -154,7 +154,7 @@ if __name__ == "__main__":
     y_magnitude_test = y_magnitude.loc[y_test.index]
 
     # Fit model
-    print("[INFO] Fitting model...")    
+    print("[INFO] Fitting model...")
     predictor.fit(X_train, y_train)
 
     # Predict
