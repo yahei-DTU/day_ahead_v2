@@ -21,8 +21,16 @@ transform:
   rename_columns:
     col3: new_col3
     col4: new_col4
-  drop_dublicates: true
+  drop_duplicates: true
   drop_missing_threshold: 0.1
   fill_missing:
     method: "forward" # mean, median, mode, forward, backward, interpolate, zero
     limit: 2 # for forward, backward and interpolate methods
+  convert_types:
+    col5: "float"
+    col6: "int"
+  normalize:
+    method: "zscore" # minmax, zscore
+    columns:
+      - col7
+      - col8
