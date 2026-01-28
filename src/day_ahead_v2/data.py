@@ -45,22 +45,23 @@ class DataHandler:
         _data (pd.DataFrame): Loaded data (DataFrame).
     """
 
-    def __init__(self, filename: str | None = None, filepath: str | None = None, **kwargs: Any):
+    def __init__(self, cfg: DictConfig | None = None) -> None:
         """
         Initialize a DataHandler.
 
         Args:
-            filename (str | None): Name of the file to load. If None, no file is loaded.
-            filepath (str | None): Directory path containing the file. If None, no file is loaded.
-            **kwargs: Extra arguments forwarded to pandas read_* functions.
+            cfg (DictConfig | None): Optional configuration for loading data.
         """
-        self.filename: str | None = filename
-        self.filepath: str | None = filepath
-        self.arguments: Dict[str, Any] = kwargs
-        if self.filename is not None and self.filepath is not None:
-            self._data: pd.DataFrame = self._load_data()
+        if cfg is not None:
+            self.filename: str | None = cfg.get("filename", None)
+            self.filepath: str | None = cfg.get("filepath", None)
+            self.arguments: Dict[str, Any] = dict(cfg.get("load_args", {}))
+            self._data = self._load_data()
         else:
-            self._data: pd.DataFrame = pd.DataFrame()
+            self.filename: str | None = None
+            self.filepath: str | None = None
+            self.arguments: Dict[str, Any] = {}
+            self._data = pd.DataFrame()
 
     @property
     def data(self) -> pd.DataFrame:
@@ -77,28 +78,25 @@ class DataHandler:
         """Load data from the specified file into a pandas DataFrame."""
         data_path = Path(self.filepath) / self.filename
         if not data_path.is_absolute():
-            data_path = Path(__file__).resolve().parent.parent / data_path
+            data_path = Path(__file__).resolve().parent.parent.parent / data_path
+
         logger.info("Loading data from: %s", data_path)
 
-        # Check if file exists
         if not data_path.is_file():
-            dir_path = data_path.parent
-            raise FileNotFoundError(f"File '{self.filename}' not found in '{dir_path}'")
+            raise FileNotFoundError(f"File '{self.filename}' not found in '{self.filepath}'")
 
-        # Determine file extension and use appropriate pandas reader
-        file_extension = Path(self.filename).suffix.lower()
-        if file_extension == '.csv':
+        ext = Path(self.filename).suffix.lower()
+        if ext == ".csv":
             return pd.read_csv(data_path, **self.arguments)
-        elif file_extension in ['.xlsx', '.xls']:
+        elif ext in [".xlsx", ".xls"]:
             return pd.read_excel(data_path, **self.arguments)
-        elif file_extension == '.json':
+        elif ext == ".json":
             return pd.read_json(data_path, **self.arguments)
-        elif file_extension == '.parquet':
-            args = dict(self.arguments)
-            engine = args.pop("engine", None)
-            return pd.read_parquet(data_path, engine=engine, **args)
+        elif ext == ".parquet":
+            engine = self.arguments.pop("engine", None)
+            return pd.read_parquet(data_path, engine=engine, **self.arguments)
         else:
-            raise ValueError(f"Unsupported file format: {file_extension}")
+            raise ValueError(f"Unsupported file format: {ext}")
 
     def load_file(self, filename: str, filepath: str , **kwargs) -> None:
         """
@@ -445,88 +443,65 @@ class DataHandler:
         return new_handler
 
 
-    def save(self, filename: Union[str, None] = None,
-             directory: Union[str, None] = None, **kwargs) -> str:
+    def save(self, filename: str | None = None, directory: str | None = None, **kwargs) -> Path:
         """
-        Save the data to a file in the specified format.
+        Save the data to disk. Supports CSV, Parquet, Excel, JSON formats.
 
         Args:
-            filename (str, optional): Name for the saved file. If None,
-                uses original filename with new format.
-            directory (str, optional): Directory to save the file. If None,
-                saves to the same directory as original data.
-            **kwargs: Additional arguments to pass to pandas save function.
-
-        Returns:
-            str: Path to the saved file.
+            filename (str | None): Name of the output file. If None, defaults to
+                original filename with '_saved' suffix and '.csv' extension.
+            directory (str | None): Directory to save the file. If None, uses
+                the original file's directory or current working directory.
+            **kwargs: Additional arguments passed to the pandas to_* functions.
 
         Raises:
-            ValueError: If no data is loaded to save.
-            IOError: If saving the file fails.
+            ValueError: If no data is loaded.
+            ValueError: If filename does not include an extension or has unsupported format.
+            ValueError: If saving non-DataFrame data is attempted.
+        Returns:
+            Path: The path to the saved file.
         """
         if self._data is None:
             raise ValueError("No data to save. Load data first.")
 
-        # Map extensions to formats
-        ext_map = {
-            ".csv": "csv",
-            ".parquet": "parquet",
-            ".xlsx": "excel",
-            ".xls": "excel",
-            ".json": "json",
+        # Supported extensions
+        writers = {
+            ".csv": lambda p: self._data.to_csv(p, index=False, **kwargs),
+            ".parquet": lambda p: self._data.to_parquet(p, index=False, **kwargs),
+            ".xlsx": lambda p: self._data.to_excel(p, index=False, **kwargs),
+            ".xls": lambda p: self._data.to_excel(p, index=False, **kwargs),
+            ".json": lambda p: self._data.to_json(p, orient="records", indent=2, **kwargs),
         }
 
-        # Determine extension & format
-        candidate = Path(filename) if filename else Path(
-            self.filename or "_.csv")
-        ext = candidate.suffix.lower()
-        fmt = ext_map.get(ext, "txt")
-
-        # Resolve save directory
-        if directory is None:
-            save_path = Path(self.filepath).parent if self.filepath else Path(
-                "data")
+        # Resolve filename
+        if filename:
+            output_name = Path(filename)
         else:
-            save_path = Path(directory)
+            base = Path(self.filename).stem if self.filename else "data"
+            output_name = Path(f"{base}_saved.csv")
 
-        if not save_path.is_absolute():
-            save_path = Path(__file__).resolve().parent.parent / save_path
+        ext = output_name.suffix.lower()
+        if not ext:
+            raise ValueError("Filename must include a file extension")
+        if ext not in writers:
+            raise ValueError(f"Unsupported file format: {ext}")
 
-        save_path.mkdir(parents=True, exist_ok=True)
-
-        # Construct final output path
-        if filename is None:
-            base = candidate.stem
-            output_path = (
-                save_path / f"{base}_saved.{fmt if fmt != 'excel' else 'xlsx'}"
-                )
+        # Resolve directory
+        if directory:
+            save_dir = Path(directory)
+        elif self.filepath:
+            save_dir = Path(self.filepath).parent.parent
         else:
-            output_path = save_path / candidate
-            if fmt == "excel":
-                output_path = output_path.with_suffix(".xlsx")
+            save_dir = Path.cwd()
 
-        try:
-            if isinstance(self._data, pd.DataFrame):
-                if fmt == "csv":
-                    self._data.to_csv(output_path, index=False, **kwargs)
-                elif fmt == "parquet":
-                    self._data.to_parquet(output_path, index=False, **kwargs)
-                elif fmt == "excel":
-                    self._data.to_excel(output_path, index=False, **kwargs)
-                elif fmt == "json":
-                    self._data.to_json(output_path, orient="records",
-                                       indent=2, **kwargs)
-                else:
-                    raise ValueError(f"Unsupported format: {fmt}")
-            else:
-                output_path.write_text(str(self._data), encoding="utf-8")
+        save_dir.mkdir(parents=True, exist_ok=True)
+        output_path = save_dir / output_name
 
-            return output_path
-
-        except Exception as e:
-            print(f"[ERROR] Error saving data: {str(e)}")
-            raise
-
+        if not isinstance(self._data, pd.DataFrame):
+            raise ValueError("Saving non-DataFrame data is not supported")
+        writers[ext](output_path)
+        logger.info("Data saved to %s", output_path)
+        return output_path
 
 class OpenMeteoHandler(DataHandler):
     """
@@ -547,7 +522,7 @@ class OpenMeteoHandler(DataHandler):
 
     def _fetch_data(self) -> pd.DataFrame:
         """
-        Fetch historical forecast data from OpenMeteo API and return as a pa  ndas DataFrame.
+        Fetch historical forecast data from OpenMeteo API and return as a pandas DataFrame.
 
         Returns:
             pd.DataFrame: Data fetched from the API.
@@ -629,17 +604,14 @@ class OpenMeteoHandler(DataHandler):
         return hourly_data
 
 
-@hydra.main(config_path="../../configs", config_name="config_dev")
+@hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev.yaml")
 def main(cfg: DictConfig) -> None:
-    # Set logging level from config
-    logging.basicConfig(level=cfg.logging.level)
-
-    #
-
-
-sys.exit()
+    logger.info("Starting main function")
 
 if __name__ == "__main__":
+    main()
+
+    sys.exit()
     # Create an empty DataFrame with hourly datetime index
     features_df = pd.DataFrame()
     features_df["datetime"] = pd.date_range(start='2023-01-01',
@@ -2377,7 +2349,7 @@ if __name__ == "__main__":
     print("Shape features: ", features_df.shape)
 
     # Save features_df as parquet file relative to current file location
-    output_path = (Path(__file__).resolve().parent.parent /
+    output_path = (Path(__file__).resolve().parent.parent.parent /
                    "data/processed/imbalance_data.parquet")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     features_df.to_csv(output_path.with_suffix('.csv'), index=False)

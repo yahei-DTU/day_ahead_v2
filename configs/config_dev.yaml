@@ -6,5 +6,11 @@ defaults:
 
 seed: 42
 
-logging:
-  level: DEBUG
+hydra:
+  job_logging:
+    version: 1
+    root:
+      level: DEBUG
+      handlers: [console]
+  hydra_logging:
+    level: DEBUG

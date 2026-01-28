@@ -15,17 +15,17 @@ Dependencies: pandas, typing, pathlib, data_handler
 
 from pathlib import Path
 from typing import Any, Sequence
+import hydra
 import logging
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import hydra
 from scipy.stats import f_oneway
-import dcor
 from sklearn.preprocessing import LabelEncoder
 from sklearn.feature_selection import mutual_info_regression, mutual_info_classif
 from tabulate import tabulate
 from day_ahead_v2.utils.plot_settings import color_palette_1, color_palette_2
+from day_ahead_v2.data import DataHandler
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class DescriptiveAnalysis:
         data (pd.DataFrame): The dataset on which to perform the analysis.
     """
 
-    def __init__(self, data: pd.DataFrame):
+    def __init__(self, data: pd.DataFrame) -> None:
         """
         Initializes the DescriptiveAnalysis class with the provided dataset.
         Args:
@@ -52,7 +52,7 @@ class DescriptiveAnalysis:
             cols (Sequence[str] | None): A list of columns to include in the analysis.
 
         Returns:
-            dict[str, Any]: A dictionary containing the computed statistics.
+            statistics (dict[str, Any]): A dictionary containing the computed statistics.
         """
         statistics = {}
         numerical_columns = self.data.select_dtypes(include=[np.number]).columns
@@ -101,7 +101,7 @@ class DescriptiveAnalysis:
             cols (Sequence[str] | None): A list of columns to include in the analysis.
 
         Returns:
-            dict[str, Any]: A dictionary containing the computed statistics for categorical columns.
+            statistics (dict[str, Any]): A dictionary containing the computed statistics for categorical columns.
         """
         categorical_stats = {}
         categorical_columns = self.data.select_dtypes(include=['object', 'category', 'string']).columns
@@ -296,11 +296,11 @@ class DescriptiveAnalysis:
                 continue
 
             X = df_valid[col].values.reshape(-1, 1)
-            y = df_valid[target_col].values
+            y = df_valid[target_col].to_numpy().ravel()
 
             if is_classification:
                 # Encode target if needed
-                if not np.issubdtype(y.dtype, np.number):
+                if not pd.api.types.is_numeric_dtype(df_valid[target_col]):
                     y = LabelEncoder().fit_transform(y)
 
                 mi = mutual_info_classif(
@@ -418,7 +418,7 @@ class DescriptiveAnalysis:
             if cols is not None and column not in cols:
                 continue
             plt.figure()
-            self.data[column].hist(bins=30)
+            self.data[column].hist(bins=30, color=color_palette_1['blue'], edgecolor='black')
             plt.title(f'Histogram of {column}')
             plt.xlabel(column)
             plt.ylabel('Frequency')
@@ -431,17 +431,17 @@ class DescriptiveAnalysis:
             plt.close()
 
 
-@hydra.main(config_path="../../configs", config_name="config_dev.yaml")
+@hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev.yaml")
 def main(cfg):
+    logger.info("Starting main function")
     # Import imbalance dataset
-    imbalance_data = DataHandler("imbalance_data.parquet",
-                                 "data/processed")
+    imbalance_data = DataHandler(cfg.datasets)
 
     # Filter data between specific dates
     imbalance_data.set_data(
         imbalance_data.data[
-            (imbalance_data.data['datetime'] < cfg.experiment_parameters.end_date) &
-            (imbalance_data.data['datetime'] >= cfg.experiment_parameters.start_date)
+            (imbalance_data.data['datetime'] < cfg.experiments.experiment_parameters.end_date) &
+            (imbalance_data.data['datetime'] >= cfg.experiments.experiment_parameters.start_date)
             ]
         )
 
@@ -452,21 +452,21 @@ def main(cfg):
     categorial_stats = descriptive_analyzer.compute_categorical_statistics(
         cols=["ImbalanceDirection_DK1"]
     )
-    print("Categorical Statistics for ImbalanceDirection_DK1:")
+    logger.info("Categorical Statistics for ImbalanceDirection_DK1:")
     for col, stat in categorial_stats.items():
-        print(f"{col}: {stat}")
+        logger.info(f"{col}: {stat}")
 
     # Compute numerical statistics
     numerical_stats = descriptive_analyzer.compute_numerical_statistics(
         cols=["ImbalanceMWh_DK1", "ImbalancePriceEUR_DK1"]
         )
-    print("Numerical Statistics:")
+    logger.info("Numerical Statistics:")
     for col, stats in numerical_stats.items():
-        print(f"{col}: {stats}")
+        logger.info(f"{col}: {stats}")
 
     # Plot histograms
     descriptive_analyzer.plot_histograms(
-        output_dir="figures/descriptive_analysis", cols=["ImbalanceMWh_DK1",
+        output_dir="reports/figures/descriptive_analysis", cols=["ImbalanceMWh_DK1",
                                                          "ImbalancePriceEUR_DK1"]
         )
 
@@ -491,24 +491,24 @@ def main(cfg):
         cols=["ImbalanceMWh_DK1", "ImbalancePriceEUR_DK1"]
         )
 
-    print("\nNumerical Statistics for Surplus:")
+    logger.info("\nNumerical Statistics for Surplus:")
     for col, stats in numerical_stats_surplus.items():
-        print(f"{col}: {stats}")
+        logger.info(f"{col}: {stats}")
 
-    print("\nNumerical Statistics for Neutral:")
+    logger.info("\nNumerical Statistics for Neutral:")
     for col, stats in numerical_stats_neutral.items():
-        print(f"{col}: {stats}")
+        logger.info(f"{col}: {stats}")
 
-    print("\nNumerical Statistics for Deficit:")
+    logger.info("\nNumerical Statistics for Deficit:")
     for col, stats in numerical_stats_deficit.items():
-        print(f"{col}: {stats}")
+        logger.info(f"{col}: {stats}")
 
     # Compute and print correlation matrix
     corr_matrix = descriptive_analyzer.correlation_matrix()
 
     # Print the 30 columns with highest absolute correlation to ImbalanceDirection_DK1
     if "ImbalanceMWh_DK1" not in corr_matrix.index:
-        print("ImbalanceMWh_DK1 not found in correlation matrix.")
+        logger.info("ImbalanceMWh_DK1 not found in correlation matrix.")
     else:
         top_abs = (
             corr_matrix.loc["ImbalanceMWh_DK1"]
@@ -518,10 +518,10 @@ def main(cfg):
             .head(30)
         )
         top30_original = corr_matrix.loc["ImbalanceMWh_DK1", top_abs.index]
-        print("Top 30 columns by absolute correlation with ImbalanceMWh_DK1:")
+        logger.info("Top 30 columns by absolute correlation with ImbalanceMWh_DK1:")
         # Build a table and print it using tabulate
         top30_df = top30_original.rename_axis('column').reset_index(name='correlation')
-        print(tabulate(
+        logger.info(tabulate(
             top30_df.values, headers=top30_df.columns, tablefmt='github', floatfmt=".6f"
             ))
 
@@ -529,9 +529,16 @@ def main(cfg):
     anova_stats = descriptive_analyzer.anova_test(
         target_col="ImbalanceDirection_DK1"
         )
-    print("\nANOVA Test Results:")
-    print(tabulate(anova_stats.sort_values('eta_squared', ascending=False).values,
-                   headers=anova_stats.columns, tablefmt='github', floatfmt=".6f"))
+    logger.info("\nANOVA Test Results:")
+    df_sorted = anova_stats.sort_values('eta_squared', ascending=False)
+
+    table_str = tabulate(
+        df_sorted.values,       # only the values, not the DataFrame object
+        headers=df_sorted.columns,
+        tablefmt="github",
+            floatfmt=".6f"
+        )
+    logger.info("\n" + table_str)
 
     # Compute correlations for extreme events: lowest 10% and highest 90% of ImbalanceMWh_DK1
     p10 = imbalance_data.data['ImbalanceMWh_DK1'].quantile(0.05)
@@ -547,7 +554,7 @@ def main(cfg):
 
     # Print the 30 columns with highest absolute correlation to ImbalanceDirection_DK1
     if "ImbalanceMWh_DK1" not in extreme_corr_matrix.index:
-        print("ImbalanceMWh_DK1 not found in correlation matrix.")
+        logger.info("ImbalanceMWh_DK1 not found in correlation matrix.")
     else:
         top_abs = (
             extreme_corr_matrix.loc["ImbalanceMWh_DK1"]
@@ -557,10 +564,10 @@ def main(cfg):
             .head(30)
         )
         top30_original = extreme_corr_matrix.loc["ImbalanceMWh_DK1", top_abs.index]
-        print("Top 30 columns by absolute correlation with ImbalanceMWh_DK1:")
+        logger.info("Top 30 columns by absolute correlation with ImbalanceMWh_DK1:")
         # Build a table and print it using tabulate
         top30_df = top30_original.rename_axis('column').reset_index(name='correlation')
-        print(tabulate(
+        logger.info(tabulate(
             top30_df.values, headers=top30_df.columns, tablefmt='github', floatfmt=".6f"
             ))
 
@@ -568,6 +575,51 @@ def main(cfg):
     anova_stats = extreme_analyzer.anova_test(
         target_col="ImbalanceDirection_DK1"
         )
-    print("\nANOVA Test Results:")
-    print(tabulate(anova_stats.sort_values('eta_squared', ascending=False).values,
-                   headers=anova_stats.columns, tablefmt='github', floatfmt=".6f"))
+    logger.info("\nANOVA Test Results:")
+    df_sorted = anova_stats.sort_values('eta_squared', ascending=False)
+
+    table_str = tabulate(
+        df_sorted.values,       # only the values, not the DataFrame object
+        headers=df_sorted.columns,
+        tablefmt="github",
+        floatfmt=".6f"
+    )
+
+    logger.info("\n" + table_str)
+
+    # Compute mutual information for IM Direction
+    mi_stats = descriptive_analyzer.mutual_information(
+        target_col="ImbalanceDirection_DK1",
+        is_classification=True
+        )
+    logger.info("\nMutual Information Results:")
+    df_sorted = mi_stats.sort_values('mutual_information', ascending=False)
+
+    table_str = tabulate(
+        df_sorted.values,       # only the values, not the DataFrame object
+        headers=df_sorted.columns,
+        tablefmt="github",
+        floatfmt=".6f"
+    )
+
+    logger.info("\n" + table_str)
+
+    # Compute mutual information for IM MWh
+    mi_stats = descriptive_analyzer.mutual_information(
+        target_col="ImbalanceMWh_DK1",
+        is_classification=False
+        )
+    logger.info("\nMutual Information Results:")
+    df_sorted = mi_stats.sort_values('mutual_information', ascending=False)
+
+    table_str = tabulate(
+        df_sorted.values,       # only the values, not the DataFrame object
+        headers=df_sorted.columns,
+        tablefmt="github",
+        floatfmt=".6f"
+    )
+
+    logger.info("\n" + table_str)
+
+if __name__ == "__main__":
+    main()
