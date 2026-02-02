@@ -17,6 +17,7 @@ import logging
 from omegaconf import DictConfig
 import hydra
 from typing import Dict, Any
+import re
 import numpy as np
 import pandas as pd
 import openmeteo_requests
@@ -53,9 +54,9 @@ class DataHandler:
             cfg (DictConfig | None): Optional configuration for loading data.
         """
         if cfg is not None:
-            self.filename: str | None = cfg.get("filename", None)
-            self.filepath: str | None = cfg.get("filepath", None)
-            self.arguments: Dict[str, Any] = dict(cfg.get("load_args", {}))
+            self.filename: str | None = cfg.datasets.get("filename", None)
+            self.filepath: str | None = cfg.datasets.get("filepath", None)
+            self.arguments: Dict[str, Any] = dict(cfg.datasets.get("load_args", {}))
             self._data = self._load_data()
         else:
             self.filename: str | None = None
@@ -245,15 +246,71 @@ class DataHandler:
         df = self._data.copy()
         log: list[str] = []
 
-        self._drop_columns(df, cfg.transform, log)
-        self._rename_columns(df, cfg.transform, log)
-        self._drop_duplicates(df, cfg.transform, log)
-        self._drop_missing_columns(df, cfg.transform, log)
-        self._fill_missing(df, cfg.transform, log)
-        self._convert_types(df, cfg.transform, log)
-        self._normalize_columns(df, cfg.transform, log)
+        self._label_mapping(df, cfg.datasets.transform, log)
+        self._drop_columns(df, cfg.datasets.transform, log)
+        self._rename_columns(df, cfg.datasets.transform, log)
+        self._drop_duplicates(df, cfg.datasets.transform, log)
+        self._drop_missing_columns(df, cfg.datasets.transform, log)
+        self._fill_missing(df, cfg.datasets.transform, log)
+        self._convert_types(df, cfg.datasets.transform, log)
+        self._normalize_columns(df, cfg.datasets.transform, log)
 
         return self._build_new_handler(df, log)
+
+    def _label_mapping(self, df: pd.DataFrame, cfg: DictConfig, log: list[str]) -> None:
+        """
+        Apply label mappings defined in the config to target columns.
+
+        Args:
+            df (pd.DataFrame): DataFrame to modify in-place
+            cfg (DictConfig): Transformation config section
+            log (list[str]): Transformation log
+        """
+        if not cfg or not cfg.get("label_mapping"):
+            logger.debug("No label mapping specified. Skipping label mapping.")
+            return
+
+        label_mapping_cfg = cfg.label_mapping
+
+        for column, mapping in label_mapping_cfg.items():
+            if column not in df.columns:
+                logger.warning(f"Label mapping skipped: column '{column}' not found.")
+                continue
+
+            # Convert OmegaConf -> dict
+            mapping_dict = dict(mapping)
+
+            # Convert mapping keys & values to int (robust to string/numeric columns)
+            try:
+                mapping_int = {int(k): int(v) for k, v in mapping_dict.items()}
+            except ValueError as e:
+                raise ValueError(
+                    f"Invalid label mapping for column '{column}'. "
+                    f"Keys and values must be castable to int."
+                ) from e
+
+            # Convert column to numeric (safe even if already numeric)
+            series = pd.to_numeric(df[column], errors="coerce")
+
+            # Check for unseen labels
+            unique_labels = set(series.dropna().unique())
+            expected_labels = set(mapping_int.keys())
+            unseen = unique_labels - expected_labels
+
+            if unseen:
+                raise ValueError(
+                    f"Unmapped labels found in column '{column}': {sorted(unseen)}. "
+                    f"Expected only: {sorted(expected_labels)}"
+                )
+
+            # Apply mapping
+            df[column] = series.map(mapping_int).astype("int64")
+
+            msg = (
+                f"Applied label mapping to '{column}': "
+                f"{mapping_int}"
+            )
+            log.append(msg)
 
     def _drop_columns(self, df: pd.DataFrame, cfg: DictConfig, log: list[str]) -> None:
         """Drop specified columns from the DataFrame."""
@@ -442,6 +499,48 @@ class DataHandler:
 
         return new_handler
 
+    def cut_data(self, start: pd.Timestamp, end: pd.Timestamp, datetime_column: str) -> "DataHandler":
+        """
+        Cut the data to a specific datetime range.
+
+        Args:
+            start (pd.Timestamp): Start of the datetime range (inclusive).
+            end (pd.Timestamp): End of the datetime range (inclusive).
+            datetime_column (str): Name of the datetime column to filter on.
+
+        Raises:
+            ValueError: If datetime_column does not exist or is not datetime type.
+            ValueError: If no data is loaded.
+            ValueError: If datetime column in data is timezone-naive.
+
+        Returns:
+            DataHandler: New instance with data cut to the specified range.
+        """
+        if self._data is None or self._data.empty:
+            raise ValueError("No data loaded to cut.")
+
+        if datetime_column not in self._data.columns:
+            raise ValueError(f"Column '{datetime_column}' does not exist in data.")
+
+        if not pd.api.types.is_datetime64_any_dtype(self._data[datetime_column]):
+            raise ValueError(f"Column '{datetime_column}' is not of datetime type.")
+
+        # Check timezone awareness compatibility
+        if (self._data[datetime_column].dt.tz is None):
+            raise ValueError("Datetime column in data is timezone-naive, but must be timezone-aware.")
+
+        mask = (self._data[datetime_column] >= start) & (self._data[datetime_column] < end)
+        cut_df = self._data.loc[mask].copy()
+
+        logger.info(
+            "Data cut to range %s to %s. New shape: %s rows, %s columns",
+            start,
+            end,
+            cut_df.shape[0],
+            cut_df.shape[1],
+        )
+
+        return self._build_new_handler(cut_df, [f"Cut data to range {start} - {end}"])
 
     def save(self, filename: str | None = None, directory: str | None = None, **kwargs) -> Path:
         """

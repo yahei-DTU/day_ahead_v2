@@ -17,168 +17,388 @@ Dependencies:
     - tabulate
     - src.data_handler (custom module)
 """
-
-import sys
-from pathlib import Path
-from typing import Dict, Any
-# import pandas as pd
-# import numpy as np
-# import matplotlib.pyplot as plt
-# from sklearn.linear_model import LogisticRegression
-# from sklearn.preprocessing import StandardScaler, OneHotEncoder
-# from sklearn.feature_selection import RFE
-# from sklearn.model_selection import train_test_split
-# from sklearn.decomposition import PCA
-# from sklearn.metrics import (
-#     accuracy_score,
-#     confusion_matrix,
-#     ConfusionMatrixDisplay,
-#     f1_score,
-#     roc_auc_score,
-#     roc_curve
-# )
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+import logging
+import random
 import hydra
-from omegaconf import DictConfig
-# from tabulate import tabulate
-# from matplotlib.colors import TwoSlopeNorm, ListedColormap
-# from matplotlib.lines import Line2D
-# import yaml
-# from src.day_ahead_v2.data_handler import DataHandler
-# from utils.plot_settings import color_palette_1, color_palette_2, apply_plot_settings
+from hydra.utils import instantiate
+from omegaconf import DictConfig, OmegaConf
+from datetime import timedelta
+import time
+import numpy as np
+import pandas as pd
+from pathlib import Path
+from itertools import product
+from joblib import Parallel, delayed
+from day_ahead_v2.data import DataHandler
+from day_ahead_v2.evaluate import evaluate_classifier, compute_accuracy_f1
+from day_ahead_v2.utils.sanitize_names import sanitize_column_names
 
 
-@hydra.main(version_base=None, config_path="../../configs", config_name="config")
-def main(cfg: DictConfig) -> None:
-    # Your training code here
-    print(cfg)
 
-if __name__ == "__main__":
-    sys.exit(main())
-
-    # Load configuration
-    project_root = Path(__file__).resolve().parents[1]
-    config_path = project_root / "configs"
-    @hydra.main(config_name="config_dev.yaml", config_path=config_path)
-    def main(config: Dict[str, Any]) -> None:
-        print("[INFO] Starting imbalance prediction...")
+logger = logging.getLogger(__name__)
 
 
-    # Import features
-    imbalance_data = DataHandler("imbalance_data.parquet",
-                                 "data/processed")
+def rolling_windows(cfg: DictConfig):
+    """
+    Generate rolling time windows for training, validation, and testing.
 
-    #########################################################################
-    # DK1 example
-    #########################################################################
+    Args:
+        cfg (DictConfig): Configuration object containing experiment and training parameters.
+    """
+    train_days = cfg.experiments.train_parameters.train_length
+    valid_days = cfg.experiments.train_parameters.valid_length
+    test_days  = cfg.experiments.train_parameters.test_length
 
-    imbalance_data.set_data(
-        imbalance_data.data[
-            (imbalance_data.data['datetime'] < '2025-01-03') &
-            (imbalance_data.data['datetime'] >= '2023-01-03')
-        ]
-    )
+    start_date = pd.Timestamp(cfg.experiments.experiment_parameters.start_date)
+    end_date   = pd.Timestamp(cfg.experiments.experiment_parameters.end_date)
+    step_days  = test_days
 
-    # Drop rows where ImbalanceDirection_DK1 is 0
-    imbalance_data.set_data(
-        imbalance_data.data[imbalance_data.data['ImbalanceDirection_DK1'] != 0]
-    )
+    if start_date.tzinfo is None:
+        start_date = start_date.tz_localize("UTC")
+    else:
+        start_date = start_date.tz_convert("UTC")
 
-    imbalance_data = imbalance_data.transform_data(
-        drop_missing_threshold=0.1)
+    if end_date.tzinfo is None:
+        end_date = end_date.tz_localize("UTC")
+    else:
+        end_date = end_date.tz_convert("UTC")
 
-    # _ = imbalance_data.validate_data(print_report=True)
+    t = start_date
+    window_count = 0
 
-    #########################################################################
-    # Example of DK1 prediction
-    #########################################################################
+    while True:
+        train_start = t
+        train_end   = t + timedelta(days=train_days)
 
-    # No NaNs or zeros in target
-    dk1_data = imbalance_data.data[
-        imbalance_data.data['ImbalanceDirection_DK1'].notnull()]
-    dk1_data = dk1_data[dk1_data['ImbalanceDirection_DK1'] != 0]
-    # Set index to datetime
-    dk1_data = dk1_data.set_index('datetime')
-    # Set features and target
-    X = DataHandler()
-    X.set_data(dk1_data)
-    X = X.transform_data(drop_columns=['ImbalancePriceEUR_DK1',
-                                       'ImbalanceMWh_DK1',
-                                       'ImbalancePriceEUR_DK2',
-                                       'ImbalanceMWh_DK2',
-                                       'ImbalanceDirection_DK1',
-                                       'ImbalanceDirection_DK2'])
-    y_label = dk1_data['ImbalanceDirection_DK1']
-    y_magnitude = dk1_data['ImbalanceMWh_DK1']
+        valid_start = train_end
+        valid_end   = valid_start + timedelta(days=valid_days)
 
-    del dk1_data  # Free memory
+        test_start  = valid_end
+        test_end    = test_start + timedelta(days=test_days)
 
-    # predictor
-    predictor = LogisticRegressionPredictor(l1_ratio=1,
-                                            max_iter=10000,
-                                            solver='saga',
-                                            class_weight='balanced')
+        # stop when test window would exceed backtest horizon
+        if test_end > end_date:
+            break
 
-    # Preprocess features
-    print("[INFO] Preprocessing features...")
-    X_processed = predictor.preprocess(X.data)
+        window_count += 1
+        logger.info(f"Generated rolling window: {window_count} ")
+        yield {
+            "train": (train_start, train_end),
+            "valid": (valid_start, valid_end),
+            "test":  (test_start, test_end),
+        }
 
-    print(X_processed.head())
-    print(y_label.head())
+        t += timedelta(days=step_days)
 
-    sys.exit(0)
+        # Raise error if no windows were generated
+    if window_count == 0:
+        raise ValueError(
+            f"No rolling windows could be generated with the current configuration:\n"
+            f"start_date={start_date.date()}, end_date={end_date.date()}, "
+            f"train_days={train_days}, valid_days={valid_days}, test_days={test_days}, "
+            f"step_days={step_days}"
+        )
 
-    # Split into train and test
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_processed,
-        y_label,
-        test_size=0.5,
-        shuffle=False,
-        random_state=42,
-        # stratify=y_label,
-    )
+def split_features_target(cfg: DictConfig, data: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+    """
+    Split data into features and target based on config.
 
-    # Optional: Feature selection via RFE
-    if config.get('feature_selection', {}).get('enabled', False):
-        method = config['feature_selection'].get('method', 'RFE')
-        n_features = config['feature_selection'].get('n_features_to_select', 20)
-        if method == 'RFE':
-            print(f"[INFO] Performing feature selection using RFE...")
-            X_processed = predictor.rfe(
-                X_train, y_train, n_features_to_select=n_features
-            )
+    Args:
+        cfg (DictConfig): Configuration object containing dataset parameters.
+        data (pd.DataFrame): DataFrame with loaded data.
+
+    Returns:
+        X (pd.DataFrame): Features DataFrame.
+        y (pd.Series): Target variable.
+    """
+    datetime_column = cfg.datasets.training.get("datetime_column", None)
+    target_column = cfg.datasets.training.target_column
+    feature_columns = list(cfg.datasets.training.feature_columns)
+
+    missing = set(feature_columns + [target_column]) - set(data.columns)
+    if missing:
+        logger.warning(f"Missing columns in dataframe: {missing}")
+        feature_columns = [col for col in feature_columns if col in data.columns]
+
+    X = data[feature_columns]
+    y = data[target_column]
+
+    if datetime_column is not None:
+        X.set_index(data[datetime_column], inplace=True)
+        y.index = data[datetime_column]
+
+    # Sanitize column names
+    X = sanitize_column_names(X)
+
+    return X, y
+
+def get_hyperparameter_combinations(cfg: DictConfig) -> list[dict]:
+    """
+    Generate all hyperparameter combinations from config file.
+
+    Args:
+        cfg (DictConfig): Configuration object containing model hyperparameters.
+
+    Returns:
+        List[Dict]: List of dictionaries, each representing a unique combination of hyperparameters.
+    """
+    hyperparameters = OmegaConf.to_container(cfg.models.model_hyperparameters, resolve=True)
+
+    # Ensure all values are lists
+    param_grid = {}
+    for k, v in hyperparameters.items():
+        if not isinstance(v, (list, tuple)):
+            logger.warning(f"Hyperparameter '{k}' is not a list. Converting to list automatically.")
+            param_grid[k] = [v]
         else:
-            print(f"[WARNING] Feature selection method '{method}' not recognized. Skipping feature selection.")
+            param_grid[k] = v
 
-    # Split magnitude with same indices
-    y_magnitude_train = y_magnitude.loc[y_train.index]
-    y_magnitude_test = y_magnitude.loc[y_test.index]
+    keys = list(param_grid.keys())
+    values = list(param_grid.values())
+
+    combos = list(product(*values))
+    return [dict(zip(keys, combo)) for combo in combos]
+
+def train_batch(cfg: DictConfig, X_train: pd.DataFrame, y_train: pd.Series, hyperparameters: dict) -> object:
+    """Train model for a single rolling window and hyperparameter set."""
+    # Check if types are correct
+    if not isinstance(X_train, pd.DataFrame):
+        raise TypeError(f"X_train must be a pd.DataFrame, got {type(X_train)}")
+    if not isinstance(y_train, pd.Series):
+        raise TypeError(f"y_train must be a pd.Series, got {type(y_train)}")
+
+    # Instantiate model for given window and hyperparameters
+    base_params = OmegaConf.to_container(cfg.models.model_parameters, resolve=True)
+
+    model = instantiate({"_target_": cfg.models._target_, **base_params, **hyperparameters})
 
     # Fit model
-    print("[INFO] Fitting model...")
-    predictor.fit(X_train, y_train)
+    model.fit(X_train, y_train)
+    logger.info(f"Model trained with hyperparameters: {hyperparameters}")
 
-    # Predict
-    print("[INFO] Making predictions...")
-    prediction_proba = predictor.predict_proba(X_test)
+    return model
 
-    # Convert probabilities to class labels
-    alpha = config['parameters']['alpha']
-    print(f"[INFO] Using decision threshold alpha = {alpha}")
-    predictions = predictor.predict(prediction_proba, alpha=alpha)
+def test_batch(cfg: DictConfig, model: object, X_val: pd.DataFrame, y_val: pd.Series) -> dict:
+    """Test model for a single rolling window and hyperparameter set."""
+    # Predict and evaluate on validation set
+    val_metrics, _ = evaluate_classifier(model, X_val, y_val)
+    logger.info(f"Validation metrics: {val_metrics}")
 
-    # Evaluate and plot confusion matrix
-    metrics = predictor.evaluate_classifier(predictions, y_test,
-                                            prediction_proba, alpha=alpha)
+    return val_metrics
 
-    #########################################################################
-    # PCA and Visualization of Decision Boundary
-    #########################################################################
-    # Apply PCA to test set
-    X_test_pca = predictor.apply_pca(X_test, n_components=2)
+def train_and_validate_params(
+        cfg: DictConfig,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        X_val: pd.DataFrame,
+        y_val: pd.Series,
+        params: dict,
+    ) -> tuple[dict, float]:
+    model = train_batch(cfg, X_train, y_train, params)
+    metrics = test_batch(cfg, model, X_val, y_val)
+    score = metrics.get("f1_score", np.nan)
+    return params, score
 
-    # Plot decision boundary
-    predictor.plot_decision_boundary(X_test_pca, predictions,
-                                     y_test,
-                                     alpha=alpha,
-                                     show_misclassified=False,
-                                     y_magnitude=y_magnitude_test)
+
+def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> None:
+    """Train model for a single rolling window."""
+    logger.info("Training model for window...")
+
+    # ---------------------------------------------
+    # Rolling window
+    # ---------------------------------------------
+    train_start, train_end = window["train"]
+    valid_start, valid_end = window["valid"]
+    test_start, test_end   = window["test"]
+
+    logger.info(
+        f"Train: {train_start.date()} → {train_end.date()} | "
+        f"Valid: {valid_start.date()} → {valid_end.date()} | "
+        f"Test: {test_start.date()} → {test_end.date()}"
+    )
+
+    # ---------------------------------------------
+    # Data loading
+    # ---------------------------------------------
+    logger.debug("Cutting train data...")
+    data_train = data_handler.cut_data(train_start, train_end, cfg.datasets.training.datetime_column)
+    X_train, y_train = split_features_target(cfg, data_train.data)
+
+    logger.debug("Cutting validation data...")
+    data_valid = data_handler.cut_data(valid_start, valid_end, cfg.datasets.training.datetime_column)
+    X_val, y_val = split_features_target(cfg, data_valid.data)
+
+    logger.debug("Cutting test data...")
+    data_test = data_handler.cut_data(test_start, test_end, cfg.datasets.training.datetime_column)
+    X_test, y_test = split_features_target(cfg, data_test.data)
+
+    # ---------------------------------------------
+    # Hyperparameter tuning (on validation)
+    # ---------------------------------------------
+    hyperparameter_combinations = get_hyperparameter_combinations(cfg)
+
+    n_jobs = cfg.experiments.train_parameters.get("n_jobs", -1)
+
+    start = time.perf_counter()
+
+    results = Parallel(
+        n_jobs=n_jobs,
+        backend="loky",   # multiprocessing
+        verbose=5,
+    )(
+        delayed(train_and_validate_params)(
+            cfg,
+            X_train,
+            y_train,
+            X_val,
+            y_val,
+            params,
+        )
+        for params in hyperparameter_combinations
+    )
+
+    elapsed = time.perf_counter() - start
+    logger.info(
+        f"Window {train_start.date()} → {test_end.date()} | "
+        f"Hyperparameter search time: {elapsed:.2f}s | "
+        f"n_jobs={n_jobs}"
+    )
+
+    best_score = -np.inf
+    best_params = None
+
+    for params, score in results:
+        logger.info(f"Params {params} → F1={score}")
+
+        if np.isnan(score):
+            logger.warning(f"F1 score is NaN for params {params}")
+            continue
+
+        if score > best_score:
+            best_score = score
+            best_params = params
+
+    if best_params is None:
+        raise RuntimeError("No valid hyperparameter combination produced a score.")
+
+    logger.info(f"Best hyperparameters: {best_params} (F1={best_score:.4f})")
+
+    # ---------------------------------------------
+    # Retrain on train + validation
+    # ---------------------------------------------
+    X_train_full = pd.concat([X_train, X_val])
+    y_train_full = pd.concat([y_train, y_val])
+
+    final_model = train_batch(cfg, X_train_full, y_train_full, best_params)
+
+    # ---------------------------------------------
+    # Final test evaluation
+    # ---------------------------------------------
+    train_metrics, _ = evaluate_classifier(final_model, X_train_full, y_train_full)
+    logger.info(f"Train metrics: {train_metrics}")
+    test_metrics, test_results_df = evaluate_classifier(final_model, X_test, y_test)
+    logger.info(f"Test metrics: {test_metrics}")
+
+    # ---------------------------------------------
+    # Collect results
+    # ---------------------------------------------
+    results = {
+        **{f"train_{k}": v for k, v in train_metrics.items()},
+        **{f"test_{k}": v for k, v in test_metrics.items()},
+        "train_start": train_start,
+        "train_end": train_end,
+        "valid_start": valid_start,
+        "valid_end": valid_end,
+        "test_start": test_start,
+        "test_end": test_end,
+        **best_params,
+    }
+
+
+    return final_model, results, test_results_df
+
+def run_backtest(cfg: DictConfig) -> list:
+    """Run backtest over all rolling windows."""
+    logger.info("Starting backtest...")
+
+    # ---------------------------------------------
+    # Data import and preprocessing
+    # ---------------------------------------------
+    data_handler = DataHandler(cfg)
+    data_handler = data_handler.cut_data(cfg.experiments.experiment_parameters.start_date,
+                                        cfg.experiments.experiment_parameters.end_date,
+                                        cfg.datasets.training.datetime_column,
+                                        )
+    data_handler = data_handler.transform_data(cfg)
+
+    # Check for NaNs in data
+    nan_counts = data_handler.data.isnull().sum()
+    if nan_counts.sum() > 0:
+        logger.warning(f"Found NaN values in data:\n{nan_counts[nan_counts > 0]}")
+    else:
+        logger.info("No NaN values found in data")
+
+    # ---------------------------------------------
+    # Rolling window backtest
+    # ---------------------------------------------
+    all_results = []
+    all_test_results_dfs = pd.DataFrame()
+    for window in rolling_windows(cfg):
+        try:
+            _, results, test_results_df = train_model(cfg, window, data_handler)
+            all_results.append(results)
+            all_test_results_dfs = pd.concat([all_test_results_dfs, test_results_df])
+        except Exception as e:
+            logger.error(f"Error in window {window}: {e}")
+
+    # Compute average metrics over all windows
+    if not all_test_results_dfs.empty:
+        avg_metrics = compute_accuracy_f1(
+            all_test_results_dfs["true_label"].to_numpy(),
+            all_test_results_dfs["predicted_label"].to_numpy()
+        )
+        for key, value in avg_metrics.items():
+            logger.info(f"Average {key} over all windows: {value}")
+    else:
+        avg_metrics = {}
+        logger.warning("No test results to compute average metrics.")
+
+    logger.info("Backtest completed.")
+    return all_results, avg_metrics
+
+@hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev")
+def main(cfg: DictConfig) -> None:
+    logger.info("Starting experiment")
+    seed = cfg.seed
+    random.seed(seed)
+    np.random.seed(seed)
+
+    results, metrics = run_backtest(cfg)
+
+    if not results:
+        logger.warning("No results generated")
+        return
+
+    # Save results to CSV
+    OmegaConf.resolve(cfg)
+    save_path = Path(cfg.results.save_path)
+    if not save_path.is_absolute():
+        save_path = Path(__file__).resolve().parent.parent.parent / save_path
+    save_path.mkdir(parents=True, exist_ok=True)
+    results_df = pd.DataFrame(results)
+    results_df.to_csv(save_path / "backtest_results.csv", index=False)
+    logger.info(f"Results saved to {save_path / 'backtest_results.csv'}")
+
+    # Save avg_accuracy and avg_f1 to a text file
+    with open(save_path / "metrics.txt", "w") as f:
+        for key, value in metrics.items():
+            f.write(f"{key}: {value}\n")
+
+    logger.info("Experiment finished successfully")
+
+if __name__ == "__main__":
+    main()

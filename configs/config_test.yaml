@@ -1,0 +1,19 @@
+defaults:
+  - datasets: imbalance_data
+  - models: lightgbm
+  - experiments: large
+  - _self_
+
+seed: 42
+
+hydra:
+  job_logging:
+    version: 1
+    root:
+      level: WARNING
+      handlers: [console]
+  hydra_logging:
+    level: WARNING
+
+results:
+  save_path: "reports/${experiments.experiment_name}/${models.model_name}/${datasets.dataset_name}/"

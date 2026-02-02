@@ -1,0 +1,15 @@
+# Experiment configuration for Exp1
+experiment_name: "small" # Name of the experiment
+
+# Train parameters
+train_parameters:
+  train_length: 90 # Days of training
+  valid_length: 30 # Days of validation
+  test_length: 7 # Days of testing
+  n_jobs: 2 # or -1 for all cores
+
+# Model parameters
+experiment_parameters:
+  start_date: "2023-02-01" # Start date for training
+  end_date: "2023-07-03" # End date for testing
+  alpha: 0.5 # Threshold for converting probabilities to class labels

@@ -1,3 +1,5 @@
+dataset_name: "imbalance_data"
+
 type: pandas.ParquetDataSet
 filename: imbalance_data.parquet
 filepath: "data/processed/"
@@ -15,22 +17,333 @@ validation:
     duplicate_fail_pct: 5.0
 
 transform:
+  label_mapping:
+    ImbalanceDirection_DK1:
+      "-1": 0
+      "0": 1
+      "1": 2
+
   drop_columns:
-    - col1
-    - col2
   rename_columns:
-    col3: new_col3
-    col4: new_col4
   drop_duplicates: true
   drop_missing_threshold: 0.1
   fill_missing:
-    method: "forward" # mean, median, mode, forward, backward, interpolate, zero
-    limit: 2 # for forward, backward and interpolate methods
+    method: "interpolate" # mean, median, mode, forward, backward, interpolate, zero
   convert_types:
-    col5: "float"
-    col6: "int"
   normalize:
     method: "zscore" # minmax, zscore
     columns:
-      - col7
-      - col8
+    - Biomass - Actual Aggregated [MW]_DK1_Lag48h
+    - Fossil Gas - Actual Aggregated [MW]_DK1_Lag48h
+    - Fossil Hard coal - Actual Aggregated [MW]_DK1_Lag48h
+    - Fossil Oil - Actual Aggregated [MW]_DK1_Lag48h
+    - Hydro Run-of-river and poundage - Actual Aggregated [MW]_DK1_Lag48h
+    - Other renewable - Actual Aggregated [MW]_DK1_Lag48h
+    - Solar - Actual Aggregated [MW]_DK1_Lag48h
+    - Waste - Actual Aggregated [MW]_DK1_Lag48h
+    - Wind Offshore - Actual Aggregated [MW]_DK1_Lag48h
+    - Wind Onshore - Actual Aggregated [MW]_DK1_Lag48h
+    - Biomass - Actual Aggregated [MW]_DK2_Lag48h
+    - Fossil Gas - Actual Aggregated [MW]_DK2_Lag48h
+    - Fossil Hard coal - Actual Aggregated [MW]_DK2_Lag48h
+    - Fossil Oil - Actual Aggregated [MW]_DK2_Lag48h
+    - Solar - Actual Aggregated [MW]_DK2_Lag48h
+    - Waste - Actual Aggregated [MW]_DK2_Lag48h
+    - Wind Offshore - Actual Aggregated [MW]_DK2_Lag48h
+    - Wind Onshore - Actual Aggregated [MW]_DK2_Lag48h
+    - aFRR_DownPurchased_DK1
+    - aFRR_UpPurchased_DK1
+    - aFRR_DownCapPriceEUR_DK1
+    - aFRR_UpCapPriceEUR_DK1
+    - aFRR_DownPurchased_DK2
+    - aFRR_UpPurchased_DK2
+    - aFRR_DownCapPriceEUR_DK2
+    - aFRR_UpCapPriceEUR_DK2
+    - BZN|DE-LU > BZN|DK1 [MW]
+    - BZN|DK1 > BZN|DE-LU [MW]
+    - BZN|NL > BZN|DK1 [MW]
+    - BZN|DK1 > BZN|NL [MW]
+    - ForecastDayAhead_DK1_onshore
+    - ForecastDayAhead_DK1_offshore
+    - ForecastDayAhead_DK1_solar
+    - ForecastDayAhead_DK2_onshore
+    - ForecastDayAhead_DK2_offshore
+    - ForecastDayAhead_DK2_solar
+    - Scheduled Generation [MW] (D) - BZN|DK1_DK1
+    - Scheduled Generation [MW] (D) - BZN|DK2_DK2
+    - Generation - Solar [MW] Day Ahead/ BZN|DK1_DK1
+    - Generation - Wind Offshore [MW] Day Ahead/ BZN|DK1_DK1
+    - Generation - Wind Onshore [MW] Day Ahead/ BZN|DK1_DK1
+    - Generation - Solar [MW] Day Ahead/ BZN|DK2_DK2
+    - Generation - Wind Offshore [MW] Day Ahead/ BZN|DK2_DK2
+    - Generation - Wind Onshore [MW] Day Ahead/ BZN|DK2_DK2
+    - mFRR_DownPurchased_DK1
+    - mFRR_DownPriceEUR_DK1
+    - mFRR_UpPurchased_DK1
+    - mFRR_UpPriceEUR_DK1
+    - mFRR_DownPurchased_DK2
+    - mFRR_DownPriceEUR_DK2
+    - mFRR_UpPurchased_DK2
+    - mFRR_UpPriceEUR_DK2
+    - CentralPowerMWh_DK1_Lag48h
+    - LocalPowerMWh_DK1_Lag48h
+    - CommercialPowerMWh_DK1_Lag48h
+    - LocalPowerSelfConMWh_DK1_Lag48h
+    - OffshoreWindLt100MW_MWh_DK1_Lag48h
+    - OffshoreWindGe100MW_MWh_DK1_Lag48h
+    - OnshoreWindLt50kW_MWh_DK1_Lag48h
+    - OnshoreWindGe50kW_MWh_DK1_Lag48h
+    - HydroPowerMWh_DK1_Lag48h
+    - SolarPowerLt10kW_MWh_DK1_Lag48h
+    - SolarPowerGe10Lt40kW_MWh_DK1_Lag48h
+    - SolarPowerGe40kW_MWh_DK1_Lag48h
+    - SolarPowerSelfConMWh_DK1_Lag48h
+    - UnknownProdMWh_DK1_Lag48h
+    - ExchangeNO_MWh_DK1_Lag48h
+    - ExchangeSE_MWh_DK1_Lag48h
+    - ExchangeGE_MWh_DK1_Lag48h
+    - ExchangeNL_MWh_DK1_Lag48h
+    - ExchangeGreatBelt_MWh_DK1_Lag48h
+    - GrossConsumptionMWh_DK1_Lag48h
+    - GridLossTransmissionMWh_DK1_Lag48h
+    - GridLossInterconnectorsMWh_DK1_Lag48h
+    - GridLossDistributionMWh_DK1_Lag48h
+    - PowerToHeatMWh_DK1_Lag48h
+    - CentralPowerMWh_DK2_Lag48h
+    - LocalPowerMWh_DK2_Lag48h
+    - CommercialPowerMWh_DK2_Lag48h
+    - LocalPowerSelfConMWh_DK2_Lag48h
+    - OffshoreWindLt100MW_MWh_DK2_Lag48h
+    - OffshoreWindGe100MW_MWh_DK2_Lag48h
+    - OnshoreWindLt50kW_MWh_DK2_Lag48h
+    - OnshoreWindGe50kW_MWh_DK2_Lag48h
+    - HydroPowerMWh_DK2_Lag48h
+    - SolarPowerLt10kW_MWh_DK2_Lag48h
+    - SolarPowerGe10Lt40kW_MWh_DK2_Lag48h
+    - SolarPowerGe40kW_MWh_DK2_Lag48h
+    - SolarPowerSelfConMWh_DK2_Lag48h
+    - UnknownProdMWh_DK2_Lag48h
+    - ExchangeSE_MWh_DK2_Lag48h
+    - ExchangeGE_MWh_DK2_Lag48h
+    - ExchangeGreatBelt_MWh_DK2_Lag48h
+    - GrossConsumptionMWh_DK2_Lag48h
+    - GridLossTransmissionMWh_DK2_Lag48h
+    - GridLossInterconnectorsMWh_DK2_Lag48h
+    - GridLossDistributionMWh_DK2_Lag48h
+    - PowerToHeatMWh_DK2_Lag48h
+    - Day-ahead Total Load Forecast [MW] - BZN|DK1
+    - Actual Total Load [MW] - BZN|DK1_Lag48h
+    - Day-ahead Total Load Forecast [MW] - BZN|DK2
+    - Actual Total Load [MW] - BZN|DK2_Lag48h
+    - ImbalancePriceEUR_DK1_Lag48
+    - ImbalanceDirection_DK1_Lag48
+    - ImbalanceMWh_DK1_Lag48
+    - ImbalancePriceEUR_DK2_Lag48
+    - ImbalanceDirection_DK2_Lag48
+    - ImbalanceMWh_DK2_Lag48
+    - WindFarm_WindPowerForecast
+    - WindFarm_WindPowerForecast_Lag48
+    - temperature_2m_57.5N_8.0E
+    - cloud_cover_57.5N_8.0E
+    - wind_speed_10m_57.5N_8.0E
+    - wind_direction_10m_57.5N_8.0E
+    - temperature_2m_55.75N_8.25E
+    - cloud_cover_55.75N_8.25E
+    - wind_speed_10m_55.75N_8.25E
+    - wind_direction_10m_55.75N_8.25E
+    - temperature_2m_54.5N_8.75E
+    - cloud_cover_54.5N_8.75E
+    - wind_speed_10m_54.5N_8.75E
+    - wind_direction_10m_54.5N_8.75E
+    - temperature_2m_57.0N_9.75E
+    - cloud_cover_57.0N_9.75E
+    - wind_speed_10m_57.0N_9.75E
+    - wind_direction_10m_57.0N_9.75E
+    - temperature_2m_56.0N_9.0E
+    - cloud_cover_56.0N_9.0E
+    - wind_speed_10m_56.0N_9.0E
+    - wind_direction_10m_56.0N_9.0E
+    - temperature_2m_55.5N_9.5E
+    - cloud_cover_55.5N_9.5E
+    - wind_speed_10m_55.5N_9.5E
+    - wind_direction_10m_55.5N_9.5E
+    - temperature_2m_56.25N_10.25E
+    - cloud_cover_56.25N_10.25E
+    - wind_speed_10m_56.25N_10.25E
+    - wind_direction_10m_56.25N_10.25E
+    - temperature_2m_55.75N_9.75E
+    - cloud_cover_55.75N_9.75E
+    - wind_speed_10m_55.75N_9.75E
+    - wind_direction_10m_55.75N_9.75E
+    - temperature_2m_55.5N_10.25E
+    - cloud_cover_55.5N_10.25E
+    - wind_speed_10m_55.5N_10.25E
+    - wind_direction_10m_55.5N_10.25E
+    - temperature_2m_55.0N_9.75E
+    - cloud_cover_55.0N_9.75E
+    - wind_speed_10m_55.0N_9.75E
+    - wind_direction_10m_55.0N_9.75E
+
+training:
+  datetime_column: datetime
+  target_column: ImbalanceDirection_DK1
+  feature_columns:
+    - Biomass - Actual Aggregated [MW]_DK1_Lag48h
+    - Fossil Gas - Actual Aggregated [MW]_DK1_Lag48h
+    - Fossil Hard coal - Actual Aggregated [MW]_DK1_Lag48h
+    - Fossil Oil - Actual Aggregated [MW]_DK1_Lag48h
+    - Hydro Run-of-river and poundage - Actual Aggregated [MW]_DK1_Lag48h
+    - Other renewable - Actual Aggregated [MW]_DK1_Lag48h
+    - Solar - Actual Aggregated [MW]_DK1_Lag48h
+    - Waste - Actual Aggregated [MW]_DK1_Lag48h
+    - Wind Offshore - Actual Aggregated [MW]_DK1_Lag48h
+    - Wind Onshore - Actual Aggregated [MW]_DK1_Lag48h
+    - Biomass - Actual Aggregated [MW]_DK2_Lag48h
+    - Fossil Gas - Actual Aggregated [MW]_DK2_Lag48h
+    - Fossil Hard coal - Actual Aggregated [MW]_DK2_Lag48h
+    - Fossil Oil - Actual Aggregated [MW]_DK2_Lag48h
+    - Solar - Actual Aggregated [MW]_DK2_Lag48h
+    - Waste - Actual Aggregated [MW]_DK2_Lag48h
+    - Wind Offshore - Actual Aggregated [MW]_DK2_Lag48h
+    - Wind Onshore - Actual Aggregated [MW]_DK2_Lag48h
+    - aFRR_DownPurchased_DK1
+    - aFRR_UpPurchased_DK1
+    - aFRR_DownCapPriceEUR_DK1
+    - aFRR_UpCapPriceEUR_DK1
+    - aFRR_DownPurchased_DK2
+    - aFRR_UpPurchased_DK2
+    - aFRR_DownCapPriceEUR_DK2
+    - aFRR_UpCapPriceEUR_DK2
+    - BZN|DE-LU > BZN|DK1 [MW]
+    - BZN|DK1 > BZN|DE-LU [MW]
+    - BZN|NL > BZN|DK1 [MW]
+    - BZN|DK1 > BZN|NL [MW]
+    - ForecastDayAhead_DK1_onshore
+    - ForecastDayAhead_DK1_offshore
+    - ForecastDayAhead_DK1_solar
+    - ForecastDayAhead_DK2_onshore
+    - ForecastDayAhead_DK2_offshore
+    - ForecastDayAhead_DK2_solar
+    - Scheduled Generation [MW] (D) - BZN|DK1_DK1
+    - Scheduled Generation [MW] (D) - BZN|DK2_DK2
+    - Generation - Solar [MW] Day Ahead/ BZN|DK1_DK1
+    - Generation - Wind Offshore [MW] Day Ahead/ BZN|DK1_DK1
+    - Generation - Wind Onshore [MW] Day Ahead/ BZN|DK1_DK1
+    - Generation - Solar [MW] Day Ahead/ BZN|DK2_DK2
+    - Generation - Wind Offshore [MW] Day Ahead/ BZN|DK2_DK2
+    - Generation - Wind Onshore [MW] Day Ahead/ BZN|DK2_DK2
+    - mFRR_DownPurchased_DK1
+    - mFRR_DownPriceEUR_DK1
+    - mFRR_UpPurchased_DK1
+    - mFRR_UpPriceEUR_DK1
+    - mFRR_DownPurchased_DK2
+    - mFRR_DownPriceEUR_DK2
+    - mFRR_UpPurchased_DK2
+    - mFRR_UpPriceEUR_DK2
+    - CentralPowerMWh_DK1_Lag48h
+    - LocalPowerMWh_DK1_Lag48h
+    - CommercialPowerMWh_DK1_Lag48h
+    - LocalPowerSelfConMWh_DK1_Lag48h
+    - OffshoreWindLt100MW_MWh_DK1_Lag48h
+    - OffshoreWindGe100MW_MWh_DK1_Lag48h
+    - OnshoreWindLt50kW_MWh_DK1_Lag48h
+    - OnshoreWindGe50kW_MWh_DK1_Lag48h
+    - HydroPowerMWh_DK1_Lag48h
+    - SolarPowerLt10kW_MWh_DK1_Lag48h
+    - SolarPowerGe10Lt40kW_MWh_DK1_Lag48h
+    - SolarPowerGe40kW_MWh_DK1_Lag48h
+    - SolarPowerSelfConMWh_DK1_Lag48h
+    - UnknownProdMWh_DK1_Lag48h
+    - ExchangeNO_MWh_DK1_Lag48h
+    - ExchangeSE_MWh_DK1_Lag48h
+    - ExchangeGE_MWh_DK1_Lag48h
+    - ExchangeNL_MWh_DK1_Lag48h
+    - ExchangeGreatBelt_MWh_DK1_Lag48h
+    - GrossConsumptionMWh_DK1_Lag48h
+    - GridLossTransmissionMWh_DK1_Lag48h
+    - GridLossInterconnectorsMWh_DK1_Lag48h
+    - GridLossDistributionMWh_DK1_Lag48h
+    - PowerToHeatMWh_DK1_Lag48h
+    - CentralPowerMWh_DK2_Lag48h
+    - LocalPowerMWh_DK2_Lag48h
+    - CommercialPowerMWh_DK2_Lag48h
+    - LocalPowerSelfConMWh_DK2_Lag48h
+    - OffshoreWindLt100MW_MWh_DK2_Lag48h
+    - OffshoreWindGe100MW_MWh_DK2_Lag48h
+    - OnshoreWindLt50kW_MWh_DK2_Lag48h
+    - OnshoreWindGe50kW_MWh_DK2_Lag48h
+    - HydroPowerMWh_DK2_Lag48h
+    - SolarPowerLt10kW_MWh_DK2_Lag48h
+    - SolarPowerGe10Lt40kW_MWh_DK2_Lag48h
+    - SolarPowerGe40kW_MWh_DK2_Lag48h
+    - SolarPowerSelfConMWh_DK2_Lag48h
+    - UnknownProdMWh_DK2_Lag48h
+    - ExchangeSE_MWh_DK2_Lag48h
+    - ExchangeGE_MWh_DK2_Lag48h
+    - ExchangeGreatBelt_MWh_DK2_Lag48h
+    - GrossConsumptionMWh_DK2_Lag48h
+    - GridLossTransmissionMWh_DK2_Lag48h
+    - GridLossInterconnectorsMWh_DK2_Lag48h
+    - GridLossDistributionMWh_DK2_Lag48h
+    - PowerToHeatMWh_DK2_Lag48h
+    - Day-ahead Total Load Forecast [MW] - BZN|DK1
+    - Actual Total Load [MW] - BZN|DK1_Lag48h
+    - Day-ahead Total Load Forecast [MW] - BZN|DK2
+    - Actual Total Load [MW] - BZN|DK2_Lag48h
+    - ImbalancePriceEUR_DK1_Lag48
+    - ImbalanceDirection_DK1_Lag48
+    - ImbalanceMWh_DK1_Lag48
+    - ImbalancePriceEUR_DK2_Lag48
+    - ImbalanceDirection_DK2_Lag48
+    - ImbalanceMWh_DK2_Lag48
+    - WindFarm_WindPowerForecast
+    - WindFarm_WindPowerForecast_Lag48
+    - sin_hour
+    - cos_hour
+    - day_0
+    - day_1
+    - day_2
+    - day_3
+    - day_4
+    - day_5
+    - day_6
+    - temperature_2m_57.5N_8.0E
+    - cloud_cover_57.5N_8.0E
+    - wind_speed_10m_57.5N_8.0E
+    - wind_direction_10m_57.5N_8.0E
+    - temperature_2m_55.75N_8.25E
+    - cloud_cover_55.75N_8.25E
+    - wind_speed_10m_55.75N_8.25E
+    - wind_direction_10m_55.75N_8.25E
+    - temperature_2m_54.5N_8.75E
+    - cloud_cover_54.5N_8.75E
+    - wind_speed_10m_54.5N_8.75E
+    - wind_direction_10m_54.5N_8.75E
+    - temperature_2m_57.0N_9.75E
+    - cloud_cover_57.0N_9.75E
+    - wind_speed_10m_57.0N_9.75E
+    - wind_direction_10m_57.0N_9.75E
+    - temperature_2m_56.0N_9.0E
+    - cloud_cover_56.0N_9.0E
+    - wind_speed_10m_56.0N_9.0E
+    - wind_direction_10m_56.0N_9.0E
+    - temperature_2m_55.5N_9.5E
+    - cloud_cover_55.5N_9.5E
+    - wind_speed_10m_55.5N_9.5E
+    - wind_direction_10m_55.5N_9.5E
+    - temperature_2m_56.25N_10.25E
+    - cloud_cover_56.25N_10.25E
+    - wind_speed_10m_56.25N_10.25E
+    - wind_direction_10m_56.25N_10.25E
+    - temperature_2m_55.75N_9.75E
+    - cloud_cover_55.75N_9.75E
+    - wind_speed_10m_55.75N_9.75E
+    - wind_direction_10m_55.75N_9.75E
+    - temperature_2m_55.5N_10.25E
+    - cloud_cover_55.5N_10.25E
+    - wind_speed_10m_55.5N_10.25E
+    - wind_direction_10m_55.5N_10.25E
+    - temperature_2m_55.0N_9.75E
+    - cloud_cover_55.0N_9.75E
+    - wind_speed_10m_55.0N_9.75E
+    - wind_direction_10m_55.0N_9.75E

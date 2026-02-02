@@ -1,7 +1,7 @@
 defaults:
   - datasets: imbalance_data
-  - models: logistic_regression
-  - experiments: exp1
+  - models: xgboost
+  - experiments: large
   - _self_
 
 seed: 42
@@ -14,3 +14,6 @@ hydra:
       handlers: [console]
   hydra_logging:
     level: DEBUG
+
+results:
+  save_path: "reports/${experiments.experiment_name}/${models.model_name}/${datasets.dataset_name}/"

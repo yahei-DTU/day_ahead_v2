@@ -342,7 +342,7 @@ class DescriptiveAnalysis:
             save_path = Path(output_dir)
 
         if not save_path.is_absolute():
-            save_path = Path(__file__).resolve().parent.parent / save_path
+            save_path = Path(__file__).resolve().parent.parent.parent / save_path
 
         save_path.mkdir(parents=True, exist_ok=True)
 
@@ -377,7 +377,7 @@ class DescriptiveAnalysis:
             save_path = Path(output_dir)
 
         if not save_path.is_absolute():
-            save_path = Path(__file__).resolve().parent.parent / save_path
+            save_path = Path(__file__).resolve().parent.parent.parent / save_path
 
         save_path.mkdir(parents=True, exist_ok=True)
 
@@ -410,7 +410,7 @@ class DescriptiveAnalysis:
             save_path = Path(output_dir)
 
         if not save_path.is_absolute():
-            save_path = Path(__file__).resolve().parent.parent / save_path
+            save_path = Path(__file__).resolve().parent.parent.parent / save_path
 
         save_path.mkdir(parents=True, exist_ok=True)
 
@@ -433,7 +433,7 @@ class DescriptiveAnalysis:
 
 @hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev.yaml")
 def main(cfg):
-    logger.info("Starting main function")
+    logger.info("Starting descriptive analysis...")
     # Import imbalance dataset
     imbalance_data = DataHandler(cfg.datasets)
 
