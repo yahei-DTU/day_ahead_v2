@@ -9,7 +9,7 @@ src/.cache.sqlite
 data/raw/
 .flake8
 uv.lock
-
+submit_hpc_job.sh
 outputs/
 reports/
 

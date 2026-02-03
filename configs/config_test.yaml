@@ -11,7 +11,7 @@ hydra:
     version: 1
     root:
       level: WARNING
-      handlers: [console]
+      handlers: [console, file]
   hydra_logging:
     level: WARNING
 

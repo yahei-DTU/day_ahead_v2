@@ -1,6 +1,6 @@
 defaults:
   - datasets: imbalance_data
-  - models: xgboost
+  - models: gaussian_process_classification
   - experiments: large
   - _self_
 
