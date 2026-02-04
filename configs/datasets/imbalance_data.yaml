@@ -28,8 +28,10 @@ transform:
   drop_duplicates: true
   drop_missing_threshold: 0.1
   fill_missing:
-    method: "interpolate" # mean, median, mode, forward, backward, interpolate, zero
+    method: "forward" # mean, median, mode, forward, backward, interpolate, zero
+    limit: null
   convert_types:
+    ImbalanceDirection_DK2: int8
   normalize:
     method: "zscore" # minmax, zscore
     columns:
@@ -136,10 +138,8 @@ transform:
     - Day-ahead Total Load Forecast [MW] - BZN|DK2
     - Actual Total Load [MW] - BZN|DK2_Lag48h
     - ImbalancePriceEUR_DK1_Lag48
-    - ImbalanceDirection_DK1_Lag48
     - ImbalanceMWh_DK1_Lag48
     - ImbalancePriceEUR_DK2_Lag48
-    - ImbalanceDirection_DK2_Lag48
     - ImbalanceMWh_DK2_Lag48
     - WindFarm_WindPowerForecast
     - WindFarm_WindPowerForecast_Lag48
@@ -187,7 +187,10 @@ transform:
 training:
   datetime_column: datetime
   target_column: ImbalanceDirection_DK1
+  fallback_class: 1
   feature_columns:
+    - ImbalanceDirection_DK2_Lag48
+    - ImbalanceDirection_DK1_Lag48
     - Biomass - Actual Aggregated [MW]_DK1_Lag48h
     - Fossil Gas - Actual Aggregated [MW]_DK1_Lag48h
     - Fossil Hard coal - Actual Aggregated [MW]_DK1_Lag48h
@@ -291,10 +294,8 @@ training:
     - Day-ahead Total Load Forecast [MW] - BZN|DK2
     - Actual Total Load [MW] - BZN|DK2_Lag48h
     - ImbalancePriceEUR_DK1_Lag48
-    - ImbalanceDirection_DK1_Lag48
     - ImbalanceMWh_DK1_Lag48
     - ImbalancePriceEUR_DK2_Lag48
-    - ImbalanceDirection_DK2_Lag48
     - ImbalanceMWh_DK2_Lag48
     - WindFarm_WindPowerForecast
     - WindFarm_WindPowerForecast_Lag48

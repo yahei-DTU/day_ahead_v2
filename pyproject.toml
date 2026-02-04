@@ -35,6 +35,8 @@ dependencies = [
     "torch==2.5.1+cpu",
     "torchvision==0.20.1+cpu",
     "tqdm>=4.67.2",
+    "highspy>=1.13.0",
+    "linopy>=0.6.1",
 ]
 
 [dependency-groups]

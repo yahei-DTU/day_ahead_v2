@@ -1,7 +1,7 @@
 defaults:
-  - datasets: imbalance_data
-  - models: gaussian_process_classification
-  - experiments: large
+  - datasets: elspotprices
+  - models: logistic_regression
+  - experiments: small
   - _self_
 
 seed: 42

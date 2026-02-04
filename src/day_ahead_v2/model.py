@@ -22,6 +22,7 @@ class LogisticRegression(sklearn.linear_model.LogisticRegression):
     """
     def __init__(self, C: float = 1.0, solver: str = 'lbfgs', max_iter: int = 100, l1_ratio: float = 0.0, **kwargs):
         super().__init__(C=C, solver=solver, max_iter=max_iter, l1_ratio=l1_ratio, **kwargs)
+        logger.info("LogisticRegression initialized with parameters")
 
     def fit(self, X: pd.DataFrame, y: pd.Series, **kwargs) -> None:
         """
@@ -90,6 +91,7 @@ class GaussianProcessClassifier(sklearn.gaussian_process.GaussianProcessClassifi
             random_state=random_state,
             **kwargs,
         )
+        logger.info("GaussianProcessClassifier initialized with parameters")
 
     def fit(self, X: pd.DataFrame, y: pd.Series, **kwargs) -> None:
         """
@@ -151,6 +153,7 @@ class LightGBMClassifier(lgb.LGBMClassifier):
             random_state=random_state,
             **kwargs,
         )
+        logger.info("LightGBMClassifier initialized with parameters")
 
     def fit(self, X: pd.DataFrame, y: pd.Series, **kwargs) -> None:
         """
@@ -213,6 +216,7 @@ class XGBoostClassifier(xgb.XGBClassifier):
             eval_metric="mlogloss",   # default multi-class metric
             **kwargs,
         )
+        logger.info("XGBoostClassifier initialized with parameters")
 
     def fit(self, X: pd.DataFrame, y: pd.Series, **kwargs) -> None:
         """
@@ -286,6 +290,8 @@ class MLPClassifier(nn.Module):
             prev_dim = h
         layers.append(nn.Linear(prev_dim, output_dim))
         self.model = nn.Sequential(*layers).to(device)
+
+        logger.info(f"MLPClassifier initialized with architecture: {self.model}")
 
         # Set training parameters
         self.learning_rate = learning_rate

@@ -1,6 +1,6 @@
 defaults:
   - datasets: imbalance_data
-  - models: lightgbm
+  - models: mlp
   - experiments: large
   - _self_
 
@@ -10,10 +10,10 @@ hydra:
   job_logging:
     version: 1
     root:
-      level: WARNING
+      level: INFO
       handlers: [console, file]
   hydra_logging:
-    level: WARNING
+    level: INFO
 
 results:
   save_path: "reports/${experiments.experiment_name}/${models.model_name}/${datasets.dataset_name}/"

@@ -6,10 +6,14 @@ train_parameters:
   train_length: 90 # Days of training
   valid_length: 30 # Days of validation
   test_length: 7 # Days of testing
-  n_jobs: 2 # or -1 for all cores
+  n_jobs: 1 # or -1 for all cores
 
 # Model parameters
 experiment_parameters:
   start_date: "2023-02-01" # Start date for training
   end_date: "2023-07-03" # End date for testing
-  alpha: 0.5 # Threshold for converting probabilities to class labels
+  decision_threshold_alphas: [0.5, 0.7, 0.9] # Thresholds to be tuned for converting probabilities to class labels
+
+# Optimization parameters
+optimization_parameters:
+  wind_capacity: 10.0 # MW

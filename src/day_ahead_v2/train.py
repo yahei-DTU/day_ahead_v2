@@ -17,7 +17,9 @@ Dependencies:
     - tabulate
     - src.data_handler (custom module)
 """
+from cProfile import label
 import os
+import sys
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
@@ -34,7 +36,8 @@ from pathlib import Path
 from itertools import product
 from joblib import Parallel, delayed
 from day_ahead_v2.data import DataHandler
-from day_ahead_v2.evaluate import evaluate_classifier, compute_accuracy_f1
+from day_ahead_v2.optimization import ModelSurplus, ModelBalance, ModelDeficit
+from day_ahead_v2.evaluate import evaluate_classifier, compute_accuracy_f1, threshold_predictions
 from day_ahead_v2.utils.sanitize_names import sanitize_column_names
 
 
@@ -165,6 +168,7 @@ def get_hyperparameter_combinations(cfg: DictConfig) -> list[dict]:
 
 def train_batch(cfg: DictConfig, X_train: pd.DataFrame, y_train: pd.Series, hyperparameters: dict) -> object:
     """Train model for a single rolling window and hyperparameter set."""
+    logger.debug(f"Start training model for window {X_train.index.min()} to {X_train.index.max()} with hyperparameters: {hyperparameters}")
     # Check if types are correct
     if not isinstance(X_train, pd.DataFrame):
         raise TypeError(f"X_train must be a pd.DataFrame, got {type(X_train)}")
@@ -173,6 +177,9 @@ def train_batch(cfg: DictConfig, X_train: pd.DataFrame, y_train: pd.Series, hype
 
     # Instantiate model for given window and hyperparameters
     base_params = OmegaConf.to_container(cfg.models.model_parameters, resolve=True)
+
+    if cfg.models._target_.endswith("MLPClassifier"):
+        base_params["input_dim"] = X_train.shape[1]
 
     model = instantiate({"_target_": cfg.models._target_, **base_params, **hyperparameters})
 
@@ -185,10 +192,10 @@ def train_batch(cfg: DictConfig, X_train: pd.DataFrame, y_train: pd.Series, hype
 def test_batch(cfg: DictConfig, model: object, X_val: pd.DataFrame, y_val: pd.Series) -> dict:
     """Test model for a single rolling window and hyperparameter set."""
     # Predict and evaluate on validation set
-    val_metrics, _ = evaluate_classifier(model, X_val, y_val)
+    val_metrics, val_results_df = evaluate_classifier(model, X_val, y_val)
     logger.info(f"Validation metrics: {val_metrics}")
 
-    return val_metrics
+    return val_metrics, val_results_df
 
 def train_and_validate_params(
         cfg: DictConfig,
@@ -198,10 +205,11 @@ def train_and_validate_params(
         y_val: pd.Series,
         params: dict,
     ) -> tuple[dict, float]:
+    logger.debug(f"Training and validating with params: {params}")
     model = train_batch(cfg, X_train, y_train, params)
-    metrics = test_batch(cfg, model, X_val, y_val)
+    metrics, val_results_df = test_batch(cfg, model, X_val, y_val)
     score = metrics.get("f1_score", np.nan)
-    return params, score
+    return model, params, score, val_results_df
 
 
 def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> None:
@@ -240,6 +248,7 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
     # Hyperparameter tuning (on validation)
     # ---------------------------------------------
     hyperparameter_combinations = get_hyperparameter_combinations(cfg)
+    logger.info(f"Starting hyperparameter search over {len(hyperparameter_combinations)} combinations...")
 
     n_jobs = cfg.experiments.train_parameters.get("n_jobs", -1)
 
@@ -270,8 +279,10 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
 
     best_score = -np.inf
     best_params = None
+    best_model = None
+    best_val_results_df = None
 
-    for params, score in results:
+    for model, params, score, val_results_df in results:
         logger.info(f"Params {params} → F1={score}")
 
         if np.isnan(score):
@@ -281,11 +292,29 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
         if score > best_score:
             best_score = score
             best_params = params
+            best_model = model
+            best_val_results_df = val_results_df
 
     if best_params is None:
         raise RuntimeError("No valid hyperparameter combination produced a score.")
 
     logger.info(f"Best hyperparameters: {best_params} (F1={best_score:.4f})")
+
+    # ---------------------------------------------
+    # Decision threshold tuning (on validation)
+    # --------------------------------------------
+    alphas = cfg.experiments.experiment_parameters.get("decision_threshold_alphas", [0.0])
+
+    best_alpha = None
+    best_alpha_score = -np.inf
+    for alpha in alphas:
+        threshold_preds = threshold_predictions(cfg, best_model, best_val_results_df.filter(like="proba_class_").to_numpy(), alpha)
+        X_valid = X_val.copy()
+        X_valid["predicted_label"] = threshold_preds
+
+        for label_ in best_model.classes_:
+            datetime_index = X_valid[X_valid["predicted_label"] == label_].index
+
 
     # ---------------------------------------------
     # Retrain on train + validation

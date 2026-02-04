@@ -246,14 +246,15 @@ class DataHandler:
         df = self._data.copy()
         log: list[str] = []
 
-        self._label_mapping(df, cfg.datasets.transform, log)
-        self._drop_columns(df, cfg.datasets.transform, log)
-        self._rename_columns(df, cfg.datasets.transform, log)
-        self._drop_duplicates(df, cfg.datasets.transform, log)
-        self._drop_missing_columns(df, cfg.datasets.transform, log)
-        self._fill_missing(df, cfg.datasets.transform, log)
-        self._convert_types(df, cfg.datasets.transform, log)
-        self._normalize_columns(df, cfg.datasets.transform, log)
+        self._label_mapping(df, cfg.datasets, log)
+        self._drop_columns(df, cfg.datasets, log)
+        self._rename_columns(df, cfg.datasets, log)
+        self._drop_duplicates(df, cfg.datasets, log)
+        self._drop_missing_columns(df, cfg.datasets, log)
+        self._fill_missing(df, cfg.datasets, log)
+        self._convert_types(df, cfg.datasets, log)
+        self._normalize_columns(df, cfg.datasets, log)
+        self._to_dtype_float32(df)
 
         return self._build_new_handler(df, log)
 
@@ -266,11 +267,13 @@ class DataHandler:
             cfg (DictConfig): Transformation config section
             log (list[str]): Transformation log
         """
-        if not cfg or not cfg.get("label_mapping"):
+
+        mapping = cfg.transform.get("label_mapping")
+        if not mapping:
             logger.debug("No label mapping specified. Skipping label mapping.")
             return
 
-        label_mapping_cfg = cfg.label_mapping
+        label_mapping_cfg = cfg.transform.label_mapping
 
         for column, mapping in label_mapping_cfg.items():
             if column not in df.columns:
@@ -314,7 +317,7 @@ class DataHandler:
 
     def _drop_columns(self, df: pd.DataFrame, cfg: DictConfig, log: list[str]) -> None:
         """Drop specified columns from the DataFrame."""
-        cols = cfg.get("drop_columns")
+        cols = cfg.transform.get("drop_columns")
 
         if not cols:
             return
@@ -330,7 +333,7 @@ class DataHandler:
             log.append(f"Skipped missing columns: {missing}")
 
     def _rename_columns(self, df: pd.DataFrame, cfg: DictConfig, log: list[str]) -> None:
-        rename_dict = cfg.get("rename_columns")
+        rename_dict = cfg.transform.get("rename_columns")
 
         if not rename_dict:
             return
@@ -347,34 +350,46 @@ class DataHandler:
 
     def _drop_duplicates(self, df: pd.DataFrame, cfg: DictConfig, log: list[str]) -> None:
         """Drop duplicate rows from the DataFrame."""
-        if cfg.get("drop_duplicates", False):
+        if cfg.transform.get("drop_duplicates", False):
             original_rows = len(df)
             df.drop_duplicates(inplace=True)
             removed = original_rows - len(df)
             log.append(f"Removed {removed} duplicate rows")
 
     def _drop_missing_columns(self, df: pd.DataFrame, cfg: DictConfig, log: list[str]) -> None:
-        """Drop columns with high missing value percentages."""
-        threshold = cfg.get("drop_missing_threshold")
+        """Drop columns with high missing value percentages and remove them from feature_columns if present."""
+        threshold = cfg.transform.get("drop_missing_threshold")
 
-        if threshold is None:
+        if not threshold:
             return
 
         if 0.0 <= threshold <= 1.0:
             missing_pct = df.isnull().mean()
             cols_to_drop = missing_pct[missing_pct > threshold].index.tolist()
             if cols_to_drop:
+                # Drop from DataFrame
                 df.drop(columns=cols_to_drop, inplace=True)
                 log.append(f"Dropped columns with >{threshold*100}% missing: {cols_to_drop}")
+
+                # Remove from feature_columns if present
+                if hasattr(cfg.training, "feature_columns") and cfg.training.feature_columns:
+                    original_features = list(cfg.training.feature_columns)
+                    cfg.training.feature_columns = [
+                        col for col in cfg.training.feature_columns if col not in cols_to_drop
+                    ]
+                    removed = set(original_features) - set(cfg.training.feature_columns)
+                    if removed:
+                        log.append(f"Removed from feature_columns in config: {list(removed)}")
             else:
                 log.append(f"No columns exceeded missing threshold ({threshold*100}%)")
         else:
             logger.warning("drop_missing_threshold must be between 0.0 and 1.0")
 
+
     def _fill_missing(self, df: pd.DataFrame, cfg: DictConfig, log: list[str]) -> None:
         """Fill missing values using specified method."""
-        method = cfg.get("fill_missing", {}).get("method")
-        limit = cfg.get("fill_missing", {}).get("limit", None)
+        method = cfg.transform.fill_missing.get("method")
+        limit = cfg.transform.fill_missing.get("limit", None)
 
         if not method:
             return
@@ -420,7 +435,7 @@ class DataHandler:
 
     def _convert_types(self, df: pd.DataFrame, cfg: DictConfig, log: list[str]) -> None:
         """Convert column data types."""
-        type_dict = cfg.get("convert_types")
+        type_dict = cfg.transform.get("convert_types")
 
         if not type_dict:
             return
@@ -440,8 +455,8 @@ class DataHandler:
 
     def _normalize_columns(self, df: pd.DataFrame, cfg: DictConfig, log: list[str]) -> None:
         """Normalize specified columns."""
-        cols = cfg.get("normalize", {}).get("columns")
-        method = cfg.get("normalize", {}).get("method", "zscore")
+        cols = cfg.transform.get("normalize", {}).get("columns")
+        method = cfg.transform.get("normalize", {}).get("method", "zscore")
 
         if not cols:
             return
@@ -468,6 +483,34 @@ class DataHandler:
 
         if missing:
             log.append(f"Skipped missing columns for normalization: {missing}")
+
+    def _to_dtype_float32(self, df: pd.DataFrame) -> None:
+        """
+        Convert all numeric and boolean columns to float32 for ML compatibility.
+        Logs any remaining columns that are neither numeric nor boolean.
+        """
+        # Select all numeric or boolean columns
+        numeric_bool_cols = df.select_dtypes(include=["number", "bool"]).columns.tolist()
+
+        # Columns actually converted (exclude those already float32)
+        to_convert = [col for col in numeric_bool_cols if df[col].dtype != "float32"]
+
+        # Convert
+        df[to_convert] = df[to_convert].astype("float32")
+
+        # Columns that are neither numeric nor boolean
+        other_cols = [col for col in df.columns if col not in numeric_bool_cols]
+
+        # Log conversion summary
+        if other_cols:
+            # Include their dtypes
+            dtypes_info = {col: str(df[col].dtype) for col in other_cols}
+            logger.warning(f"Columns neither numeric nor boolean and not converted: {dtypes_info}")
+        else:
+            logger.info("All columns are numeric/boolean and converted to float32.")
+
+
+
 
     def _build_new_handler(self, df: pd.DataFrame, log: list[str]) -> "DataHandler":
         """Build a new DataHandler instance from a transformed DataFrame."""
@@ -542,7 +585,7 @@ class DataHandler:
 
         return self._build_new_handler(cut_df, [f"Cut data to range {start} - {end}"])
 
-    def save(self, filename: str | None = None, directory: str | None = None, **kwargs) -> Path:
+    def save(self, cfg, **kwargs) -> None:
         """
         Save the data to disk. Supports CSV, Parquet, Excel, JSON formats.
 
@@ -571,10 +614,12 @@ class DataHandler:
             ".xls": lambda p: self._data.to_excel(p, index=False, **kwargs),
             ".json": lambda p: self._data.to_json(p, orient="records", indent=2, **kwargs),
         }
+        savename = cfg.datasets.get("savename", None)
+        save_dir = cfg.datasets.get("savepath", None)
 
         # Resolve filename
-        if filename:
-            output_name = Path(filename)
+        if savename:
+            output_name = Path(savename)
         else:
             base = Path(self.filename).stem if self.filename else "data"
             output_name = Path(f"{base}_saved.csv")
@@ -586,13 +631,15 @@ class DataHandler:
             raise ValueError(f"Unsupported file format: {ext}")
 
         # Resolve directory
-        if directory:
-            save_dir = Path(directory)
+        if save_dir:
+            save_dir = Path(save_dir)
         elif self.filepath:
             save_dir = Path(self.filepath).parent.parent
         else:
             save_dir = Path.cwd()
 
+        if not save_dir.is_absolute():
+            save_dir = Path(__file__).resolve().parent.parent.parent / save_dir
         save_dir.mkdir(parents=True, exist_ok=True)
         output_path = save_dir / output_name
 
@@ -600,7 +647,8 @@ class DataHandler:
             raise ValueError("Saving non-DataFrame data is not supported")
         writers[ext](output_path)
         logger.info("Data saved to %s", output_path)
-        return output_path
+        return
+
 
 class OpenMeteoHandler(DataHandler):
     """
@@ -705,7 +753,39 @@ class OpenMeteoHandler(DataHandler):
 
 @hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev.yaml")
 def main(cfg: DictConfig) -> None:
-    logger.info("Starting main function")
+    elspotprices = DataHandler(cfg)
+    elspotprices = elspotprices.transform_data(cfg)
+    elspotprices = elspotprices.data
+    elspotprices["HourUTC"] = pd.to_datetime(elspotprices["HourUTC"], format='%Y-%m-%d %H:%M:%S', utc=True)
+    wind_data = pd.read_csv("data/raw/Enfor_DA_wind_power_forecast.csv")
+    wind_data = pd.read_csv("data/raw/Enfor_DA_wind_power_forecast.csv")
+    wind_data["Time_begin"] = pd.to_datetime(wind_data["Time_begin"], format='%Y-%m-%d %H:%M:%S', utc=True)
+    # check for duplicate Time_begin values
+    duplicates = wind_data["Time_begin"].duplicated().sum()
+    # print both rows with duplicate Time_begin values
+    print(f"Number of duplicate Time_begin values: {duplicates}")
+    # Keep only the first row for each duplicate Time_begin value
+    wind_data = wind_data.drop_duplicates(subset='Time_begin', keep='first')
+    wind_data = wind_data.drop(columns=['Time_end', 'SCADAPowerMeas','PTime'], errors='ignore')
+    wind_data = wind_data.rename(columns={'Time_begin': 'Hour', 'PowerPred': 'WindFarm_WindPowerForecast', 'SettlementPowerMeas': 'WindFarm_ActualWindPower'})
+    for col in wind_data.columns:
+        if col not in ["Hour", "PTime"]:
+            wind_data[col] = pd.to_numeric(wind_data[col],
+                                                errors='coerce')
+    param_data = elspotprices.merge(
+            wind_data, left_on='HourUTC',
+            right_on='Hour', how='left').drop(columns=['Hour'])
+
+    imbalance_data = pd.read_csv("data/processed/imbalance_data.csv")
+    # keep only column ImbalancePriceEUR_DK1
+    imbalance_data = imbalance_data[["datetime", "ImbalancePriceEUR_DK1"]]
+    imbalance_data["datetime"] = pd.to_datetime(
+        imbalance_data["datetime"],
+        format='%Y-%m-%d %H:%M:%S%z'
+    )
+    full_data = imbalance_data.merge(param_data, left_on='datetime', right_on='HourUTC', how='left').drop(columns=['HourUTC'])
+    full_data.to_csv("data/processed/optimization_parameter.csv", index=False)
+
 
 if __name__ == "__main__":
     main()

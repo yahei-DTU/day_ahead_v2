@@ -6,7 +6,7 @@ src/__pycache__/
 utils/__pycache__/
 src/.cache.sqlite
 *.pyc
-data/raw/
+data/
 .flake8
 uv.lock
 submit_hpc_job.sh
