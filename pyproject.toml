@@ -46,7 +46,7 @@ dev = [
     "mkdocs-material==9.4.6",
     "mkdocs==1.6.1",
     "pre-commit==4.1.0",
-    "pytest==8.3.4",
+    "pytest==9.0.2",
     "ruff==0.14.11",
     "mkdocstrings-python==2.0.2",
     "psutil>=7.2.2",
