@@ -1,0 +1,44 @@
+type: pandas.ParquetDataSet
+filename: filename.parquet
+filepath: "data/processed/"
+load_args:
+  engine: "pyarrow"
+save_args:
+  engine: "pyarrow"
+
+validation:
+  enabled: true
+  thresholds:
+    missing_warn_pct: 1.0
+    missing_fail_pct: 5.0
+    duplicate_warn_pct: 1.0
+    duplicate_fail_pct: 5.0
+
+transform:
+  drop_columns:
+    - col1
+    - col2
+  rename_columns:
+    col3: new_col3
+    col4: new_col4
+  drop_duplicates: true
+  drop_missing_threshold: 0.1
+  fill_missing:
+    method: "forward" # mean, median, mode, forward, backward, interpolate, zero
+    limit: 2 # for forward, backward and interpolate methods
+  convert_types:
+    col5: "float"
+    col6: "int"
+  normalize:
+    method: "zscore" # minmax, zscore
+    columns:
+      - col7
+      - col8
+
+training:
+  date_column: date
+  target_column: target
+  feature_columns:
+    - feature1
+    - feature2
+    - feature3

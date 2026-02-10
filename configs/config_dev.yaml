@@ -1,7 +1,7 @@
 defaults:
-  - datasets: elspotprices
-  - models: logistic_regression
-  - experiments: small
+  - datasets: imbalance_data
+  - models: xgboost
+  - experiments: large
   - _self_
 
 seed: 42

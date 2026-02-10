@@ -17,7 +17,6 @@ import logging
 from omegaconf import DictConfig
 import hydra
 from typing import Dict, Any
-import re
 import numpy as np
 import pandas as pd
 import openmeteo_requests
@@ -244,6 +243,14 @@ class DataHandler:
             return self
 
         df = self._data.copy()
+
+        # Set index to datetime column if specified
+        datetime_column = cfg.datasets.training.get("datetime_column", None)
+
+        if datetime_column is not None and datetime_column in df.columns:
+            df.set_index(datetime_column, inplace=True)
+            logger.info("Set index to datetime column: %s", datetime_column)
+
         log: list[str] = []
 
         self._label_mapping(df, cfg.datasets, log)
@@ -562,8 +569,19 @@ class DataHandler:
         if self._data is None or self._data.empty:
             raise ValueError("No data loaded to cut.")
 
+        datetime_index = False
         if datetime_column not in self._data.columns:
-            raise ValueError(f"Column '{datetime_column}' does not exist in data.")
+            # check if datetime_column is the index
+            if self._data.index.name != datetime_column:
+                raise ValueError(f"Column '{datetime_column}' does not exist in data.")
+            else:
+                datetime_index = True
+                self._data = self._data.reset_index()
+                logger.info(f"Reset index to access datetime column '{datetime_column}'.")
+        else:
+            if self._data.index.name != datetime_column:
+                datetime_index = True
+
 
         if not pd.api.types.is_datetime64_any_dtype(self._data[datetime_column]):
             raise ValueError(f"Column '{datetime_column}' is not of datetime type.")
@@ -574,6 +592,10 @@ class DataHandler:
 
         mask = (self._data[datetime_column] >= start) & (self._data[datetime_column] < end)
         cut_df = self._data.loc[mask].copy()
+
+        if datetime_index:
+            self._data.set_index(datetime_column, inplace=True)
+            cut_df.set_index(datetime_column, inplace=True)
 
         logger.info(
             "Data cut to range %s to %s. New shape: %s rows, %s columns",
@@ -753,9 +775,10 @@ class OpenMeteoHandler(DataHandler):
 
 @hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev.yaml")
 def main(cfg: DictConfig) -> None:
-    elspotprices = DataHandler(cfg)
-    elspotprices = elspotprices.transform_data(cfg)
-    elspotprices = elspotprices.data
+    elspotprices = pd.read_csv("data/raw/Elspotprices.csv", sep=';', decimal=',')
+    elspotprices = elspotprices.drop(columns=['HourDK', 'PriceArea','SpotPriceDKK'], errors='ignore')
+    elspotprices = elspotprices.rename(columns={'SpotPriceEUR': 'SpotPriceEUR_DK1'})
+    print(elspotprices.head())
     elspotprices["HourUTC"] = pd.to_datetime(elspotprices["HourUTC"], format='%Y-%m-%d %H:%M:%S', utc=True)
     wind_data = pd.read_csv("data/raw/Enfor_DA_wind_power_forecast.csv")
     wind_data = pd.read_csv("data/raw/Enfor_DA_wind_power_forecast.csv")
@@ -776,15 +799,15 @@ def main(cfg: DictConfig) -> None:
             wind_data, left_on='HourUTC',
             right_on='Hour', how='left').drop(columns=['Hour'])
 
-    imbalance_data = pd.read_csv("data/processed/imbalance_data.csv")
+    imbalance_data = pd.read_parquet("data/processed/imbalance_data.parquet", engine='pyarrow')
     # keep only column ImbalancePriceEUR_DK1
-    imbalance_data = imbalance_data[["datetime", "ImbalancePriceEUR_DK1"]]
     imbalance_data["datetime"] = pd.to_datetime(
         imbalance_data["datetime"],
         format='%Y-%m-%d %H:%M:%S%z'
     )
     full_data = imbalance_data.merge(param_data, left_on='datetime', right_on='HourUTC', how='left').drop(columns=['HourUTC'])
     full_data.to_csv("data/processed/optimization_parameter.csv", index=False)
+    full_data.to_parquet("data/processed/optimization_parameter.parquet", index=False, engine='pyarrow')
 
 
 if __name__ == "__main__":

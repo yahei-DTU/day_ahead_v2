@@ -86,7 +86,7 @@ def compute_accuracy_f1(y_true: pd.Series, y_pred: pd.Series) -> Dict[str, float
 
     return metrics
 
-def threshold_predictions(cfg, model, proba: np.ndarray, alpha: float) -> np.ndarray:
+def threshold_predictions(cfg, model, proba: np.ndarray, alpha: float) -> pd.DataFrame:
     """
     Make predictions using the trained model.
 
@@ -97,14 +97,14 @@ def threshold_predictions(cfg, model, proba: np.ndarray, alpha: float) -> np.nda
         alpha (float): Decision threshold for assigning class labels.
 
     Returns:
-        np.ndarray: Predicted class labels. Shape (n_samples,).
+        pd.DataFrame: DataFrame with predicted class labels and uncertainty flag.
     """
     logger.info(f"Applying decision threshold alpha={alpha} for predictions.")
     preds = np.zeros_like(proba, dtype=int)
     n_samples = proba.shape[0]
     # Determine fallback index
     fallback_class = cfg.datasets.training.fallback_class  # Fallback to class
-    fallback_class = fallback_class.astype("float32")
+    fallback_class = fallback_class = np.float32(fallback_class)
     if fallback_class not in model.classes_:
         raise ValueError(f"Fallback class {fallback_class} not in model.classes_: {model.classes_}")
     fallback_idx = np.where(model.classes_ == fallback_class)[0][0]
@@ -121,4 +121,48 @@ def threshold_predictions(cfg, model, proba: np.ndarray, alpha: float) -> np.nda
     preds = preds.argmax(axis=1)
     logger.info(f"Total uncertain predictions: {uncertain.sum()} out of {n_samples} ({(uncertain.sum() / n_samples) * 100:.2f}%) -  (alpha={alpha})")
 
-    return preds
+    # return df with preds and uncertain flag
+    return pd.DataFrame({
+        "thresholded_label": preds,
+        "uncertain": uncertain
+    }, index=range(len(preds)))
+
+def calculate_bids(cfg, data_df: pd.DataFrame, preds_df: pd.DataFrame, optimizers: dict) -> pd.Series:
+    """Calculate the bids for best optimization parameters"""
+    P_W_tilde = data_df[cfg.datasets.optimization.P_W_tilde]
+    model_mapping = cfg.datasets.optimization.model_mapping
+    logger.info(f"optimiers: {optimizers}")
+    DA_bids = pd.Series(index=data_df.index, dtype=float)
+    if preds_df["uncertain"].dtype != bool:
+        preds_df["uncertain"] = preds_df["uncertain"].astype(bool)
+    for label in np.unique(preds_df["thresholded_label"]):
+        label = int(label)  # Ensure label is int for mapping
+        model_name = model_mapping[label]
+        optimizer = optimizers[model_name]
+        if label == cfg.datasets.training.fallback_class:
+            preds_label = preds_df[preds_df["thresholded_label"] == label]
+        else:
+            preds_label = preds_df[
+                (preds_df["thresholded_label"] == label) &
+                (~preds_df["uncertain"])
+            ]
+        if not preds_label.empty:
+            DA_bids.loc[preds_label.index] = P_W_tilde.loc[preds_label.index] + optimizer.results.x
+    # Check if any DA_bids are still NaN (e.g., due to all predictions being uncertain or fallback class)
+    if DA_bids.isna().any():
+        logger.error(f"{DA_bids.isna().sum()} DA bids are NaN. Check calculate_bids method.")
+        DA_bids.fillna(P_W_tilde, inplace=True)
+
+    return DA_bids
+
+
+def calculate_profit(DA_bids: pd.Series, lambda_DA_hat: pd.Series, lambda_B_hat: pd.Series, P_W_hat: pd.Series) -> pd.Series:
+    """
+    Calculate profit based on realized day-ahead and imbalance prices, realized wind production.
+    """
+    profit = DA_bids * lambda_DA_hat + (P_W_hat - DA_bids) * lambda_B_hat
+    # Check for NaN values in profit
+    if profit.isna().any():
+        logger.error(f"{profit.isna().sum()} profit values are NaN. Check calculate_profit method.")
+        profit.fillna(0, inplace=True)
+    return profit

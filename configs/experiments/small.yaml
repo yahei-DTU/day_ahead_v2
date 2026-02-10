@@ -12,8 +12,8 @@ train_parameters:
 experiment_parameters:
   start_date: "2023-02-01" # Start date for training
   end_date: "2023-07-03" # End date for testing
-  decision_threshold_alphas: [0.5, 0.7, 0.9] # Thresholds to be tuned for converting probabilities to class labels
+  decision_threshold_alphas: [0.3, 0.5, 0.7, 0.9] # Thresholds to be tuned for converting probabilities to class labels
 
 # Optimization parameters
 optimization_parameters:
-  wind_capacity: 10.0 # MW
+  wind_capacity: 7.2 # MW

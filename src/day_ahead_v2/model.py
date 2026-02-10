@@ -197,11 +197,12 @@ class XGBoostClassifier(xgb.XGBClassifier):
     def __init__(
         self,
         objective: str = "multi:softprob",
-        learning_rate: float = 0.05,
-        n_estimators: int = 200,
-        max_depth: int = 6,
-        subsample: float = 1.0,
-        colsample_bytree: float = 1.0,
+        learning_rate: float = 0.03,
+        n_estimators: int = 500,
+        max_depth: int = 3,
+        subsample: float = 0.8,
+        colsample_bytree: float = 0.8,
+        min_child_weight: float = 5,
         random_state: int | None = None,
         **kwargs,
     ):
@@ -213,9 +214,10 @@ class XGBoostClassifier(xgb.XGBClassifier):
             subsample=subsample,
             colsample_bytree=colsample_bytree,
             random_state=random_state,
-            eval_metric="mlogloss",   # default multi-class metric
+            min_child_weight=min_child_weight,
+            eval_metric="mlogloss", # default multi-class metric
             **kwargs,
-        )
+            )
         logger.info("XGBoostClassifier initialized with parameters")
 
     def fit(self, X: pd.DataFrame, y: pd.Series, **kwargs) -> None:
@@ -285,6 +287,7 @@ class MLPClassifier(nn.Module):
 
         for h in hidden_dims:
             layers.append(nn.Linear(prev_dim, h))
+            layers.append(nn.BatchNorm1d(h))
             layers.append(act_fn())
             layers.append(nn.Dropout(dropout))
             prev_dim = h
@@ -301,6 +304,9 @@ class MLPClassifier(nn.Module):
         self.patience = patience
         self.verbose = verbose
         self.optimizer = optimizer
+
+        # Initialize classes_ attribute
+        self.classes_ = None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x)
@@ -323,6 +329,10 @@ class MLPClassifier(nn.Module):
             y = torch.tensor(y.values, dtype=torch.long)
         elif isinstance(y, np.ndarray):
             y = torch.tensor(y, dtype=torch.long)
+
+        # Set classes_ attribute
+        self.classes_ = torch.unique(y).sort()[0].cpu().numpy()
+        logger.info(f"Classes found in training data: {self.classes_}")
 
         # Check if features match model input dimension
         if X.shape[1] != self.model[0].in_features:

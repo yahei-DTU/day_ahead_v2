@@ -16,13 +16,22 @@ validation:
     duplicate_warn_pct: 1.0
     duplicate_fail_pct: 5.0
 
+optimization:
+  lambda_DA_hat: "SpotPriceEUR_DK1"
+  lambda_B_hat: "ImbalancePriceEUR_DK1"
+  P_W_hat: "WindFarm_ActualWindPower"
+  P_W_tilde: "WindFarm_WindPowerForecast_y"
+  model_mapping:
+    0: ModelDeficit
+    1: ModelBalance
+    2: ModelSurplus
+
 transform:
   label_mapping:
     ImbalanceDirection_DK1:
       "-1": 0
       "0": 1
       "1": 2
-
   drop_columns:
   rename_columns:
   drop_duplicates: true
@@ -141,7 +150,7 @@ transform:
     - ImbalanceMWh_DK1_Lag48
     - ImbalancePriceEUR_DK2_Lag48
     - ImbalanceMWh_DK2_Lag48
-    - WindFarm_WindPowerForecast
+    - WindFarm_WindPowerForecast_x
     - WindFarm_WindPowerForecast_Lag48
     - temperature_2m_57.5N_8.0E
     - cloud_cover_57.5N_8.0E
@@ -297,7 +306,7 @@ training:
     - ImbalanceMWh_DK1_Lag48
     - ImbalancePriceEUR_DK2_Lag48
     - ImbalanceMWh_DK2_Lag48
-    - WindFarm_WindPowerForecast
+    - WindFarm_WindPowerForecast_x
     - WindFarm_WindPowerForecast_Lag48
     - sin_hour
     - cos_hour

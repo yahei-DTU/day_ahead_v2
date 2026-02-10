@@ -12,6 +12,7 @@ uv.lock
 submit_hpc_job.sh
 outputs/
 reports/
+hpc_output/
 
 docs/site/
 

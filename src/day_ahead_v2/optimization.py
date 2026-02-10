@@ -10,16 +10,17 @@ class expando(object):
     '''
     pass
 
-class BaseWindDayAheadModel:
+class ModelHindsight:
+    """Model with perfect foresight of day-ahead prices, balancing prices, and wind power generation."""
     def __init__(self, cfg, lambda_DA_hat: pd.Series, lambda_B_hat: pd.Series, P_W_hat: pd.Series, P_W_tilde: pd.Series):
-        """Initializes the BaseWindDayAheadModel with given parameters.
+        """Initializes the HindsightModel with given parameters.
 
         Args:
             cfg: Configuration object containing experiment parameters.
-            lambda_DA_hat (pd.Series): Day-ahead electricity prices.
-            lambda_B_hat (pd.Series): Balancing electricity prices.
-            P_W_hat (pd.Series): Forecasted wind power generation.
-            P_W_tilde (pd.Series): Actual wind power generation.
+            lambda_DA_hat (pd.Series): Actual day-ahead electricity prices.
+            lambda_B_hat (pd.Series): Actual balancing electricity prices.
+            P_W_hat (pd.Series): Actual wind power generation.
+            P_W_tilde (pd.Series): Forecasted wind power generation.
         """
         # Containers for variables, constraints, and results
         self.parameters = expando()
@@ -43,7 +44,7 @@ class BaseWindDayAheadModel:
         self.constants.P_W_BAR = cfg.experiments.optimization_parameters.wind_capacity
 
         # Create Linopy model
-        self.model = linopy.Model(name=self.__class__.__name__)
+        self.model = linopy.Model()
         self._build_model()
 
     def _set_variables(self):
@@ -80,10 +81,6 @@ class BaseWindDayAheadModel:
             self.parameters.P_W_hat >= self.variables.p_DA + self.variables.delta_p,
             name="power_limit"
         )
-        self.constraints.bid_constraint = self.model.add_constraints(
-            self.variables.p_DA == self.parameters.P_W_tilde + self.variables.x,
-            name="bid_constraint"
-        )
 
     def _build_model(self):
         """Builds the optimization model by setting variables, objective, and constraints."""
@@ -98,9 +95,8 @@ class BaseWindDayAheadModel:
     def _save_results(self):
         """Saves the results of the optimization model."""
         self.results.status = self.model.status
-        if self.results.status != "optimal":
-            logger.warning("Optimization did not reach optimality.")
-            logger.warning(f"Status: {self.results.status}")
+        if self.results.status != "ok":
+            logger.warning(f"Optimization did not reach optimality. Status: {self.results.status}")
         logger.info(f"Optimization status: {self.results.status}")
         self.results.objective_value = self.model.objective.value
         self.results.p_DA = self.variables.p_DA.solution.to_pandas()
@@ -115,7 +111,19 @@ class BaseWindDayAheadModel:
         logger.info("Optimization completed.")
 
 
-class ModelBidForecast(BaseWindDayAheadModel):
+class ModelBalance(ModelHindsight):
+    def __init__(self, cfg, lambda_DA_hat: pd.Series, lambda_B_hat: pd.Series, P_W_hat: pd.Series, P_W_tilde: pd.Series):
+        """Model with adjustable bid (x) that can be positive or negative."""
+        super().__init__(cfg, lambda_DA_hat, lambda_B_hat, P_W_hat, P_W_tilde)
+
+    def _set_constraints(self):
+        """Adds additional constraints specific to the ModelBalance."""
+        self.constraints.bid_constraint = self.model.add_constraints(
+            self.variables.p_DA == self.parameters.P_W_tilde + self.variables.x,
+            name="bid_constraint"
+        )
+
+class ModelBidForecast(ModelBalance):
     """Model that enforces no bid adjustments (x == 0)."""
     def __init__(self, cfg, lambda_DA_hat, lambda_B_hat, P_W_hat, P_W_tilde):
         super().__init__(cfg, lambda_DA_hat, lambda_B_hat, P_W_hat, P_W_tilde)
@@ -128,7 +136,7 @@ class ModelBidForecast(BaseWindDayAheadModel):
             name="x_limits"
         )
 
-class ModelSurplus(BaseWindDayAheadModel):
+class ModelSurplus(ModelBalance):
     """Model that allows only surplus bids (x >= 0)."""
     def __init__(self, cfg, lambda_DA_hat, lambda_B_hat, P_W_hat, P_W_tilde):
         super().__init__(cfg, lambda_DA_hat, lambda_B_hat, P_W_hat, P_W_tilde)
@@ -141,12 +149,7 @@ class ModelSurplus(BaseWindDayAheadModel):
             name="x_limits"
         )
 
-class ModelBalance(BaseWindDayAheadModel):
-    """Model with no additional constraints on x."""
-    def __init__(self, cfg, lambda_DA_hat, lambda_B_hat, P_W_hat, P_W_tilde):
-        super().__init__(cfg, lambda_DA_hat, lambda_B_hat, P_W_hat, P_W_tilde)
-
-class ModelDeficit(BaseWindDayAheadModel):
+class ModelDeficit(ModelBalance):
     """Model that allows only deficit bids (x <= 0)."""
     def __init__(self, cfg, lambda_DA_hat, lambda_B_hat, P_W_hat, P_W_tilde):
         super().__init__(cfg, lambda_DA_hat, lambda_B_hat, P_W_hat, P_W_tilde)

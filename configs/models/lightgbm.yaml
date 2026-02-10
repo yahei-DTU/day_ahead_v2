@@ -4,15 +4,21 @@ model_name: "lightgbm"
 model_parameters:
   objective: multiclass
   num_class: 3
-  n_estimators: 300
-  min_child_samples: 5
+  n_estimators: 500                  # increase trees to compensate for smaller learning rate
+  min_child_samples: 20              # prevent tiny leaves
+  subsample: 0.7                     # row sampling → reduces memorization
+  subsample_freq: 1                  # apply subsampling at every iteration
+  feature_fraction: 0.7              # feature sampling → reduce greediness
   random_state: ${seed}
   bagging_seed: ${seed}
   feature_fraction_seed: ${seed}
   data_random_seed: ${seed}
   n_jobs: 4
+  reg_alpha: 0.1                      # L1 regularization on leaf weights
+  reg_lambda: 10                      # L2 regularization on leaf weights
+  min_split_gain: 0.5                 # require meaningful gain to split
 
 model_hyperparameters:
-  learning_rate: [0.05, 0.1]
-  num_leaves: [15, 31]
-  max_depth: [3, 5]
+  learning_rate: [0.01, 0.03]        # slower learning → smoother generalization
+  num_leaves: [7, 15]                # smaller trees → fewer splits
+  max_depth: [2, 3]                  # shallow trees → reduce memorization
