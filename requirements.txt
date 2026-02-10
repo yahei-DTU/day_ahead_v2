@@ -42,7 +42,7 @@ pathspec==1.0.3
 pillow==12.1.0
 platformdirs==4.5.1
 pluggy==1.6.0
-pre-commit==4.1.0
+pre-commit==4.5.1
 pygments==2.19.2
 pymdown-extensions==10.20
 pyparsing==3.3.1
