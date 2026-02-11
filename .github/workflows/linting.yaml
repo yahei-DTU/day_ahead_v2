@@ -31,7 +31,7 @@ jobs:
 
       - name: ruff check
         run: |
-          python -m ruff check .
+          uv run ruff check .
 
       # - name: mypy check
       #   run: |
