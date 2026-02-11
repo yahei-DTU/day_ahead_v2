@@ -1,9 +1,10 @@
-from torch.utils.data import Dataset
+import pandas as pd
+from day_ahead_v2.data import DataHandler
 
-from mlops_loadconsumption.data import MyDataset
 
-
-def test_my_dataset():
-    """Test the MyDataset class."""
-    dataset = MyDataset("data/raw")
-    assert isinstance(dataset, Dataset)
+def test_data_handler():
+    """Test the DataHandler class."""
+    data_handler = DataHandler()
+    assert data_handler is not None
+    assert hasattr(data_handler, "data")
+    assert isinstance(data_handler.data, pd.DataFrame)
