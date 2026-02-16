@@ -1,9 +1,10 @@
-parameters:
-  alpha: 0.7 # Decision threshold for classification
-  train_length: 90 # Days of training
-  test_length: 1 # Days of testing
+_target_: day_ahead_v2.model.LogisticRegression
+model_name: "logistic_regression"
 
-feature_selection:
-  enabled: False # Enable feature selection
-  method: RFE  # Feature selection method
-  n_features_to_select: 20  # Number of features to select if using RFE
+model_parameters:
+  l1_ratio: 0 # Elastic net mixing parameter, with 1 being L1 penalty
+  solver: lbfgs # Algorithm to use in the optimization problem
+  max_iter: 1000 # Maximum number of iterations
+
+model_hyperparameters:
+  C: [1e-2, 1e-1, 1, 1e+1, 1e+2]

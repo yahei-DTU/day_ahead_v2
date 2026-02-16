@@ -1,5 +1,0 @@
-seed: 42
-metrics: ["mae", "rmse"]  # For load forecasting eval
-max_runs: 10
-early_stopping: true
-patience: 5

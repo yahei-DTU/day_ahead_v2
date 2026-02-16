@@ -1,0 +1,19 @@
+defaults:
+  - datasets: imbalance_data
+  - models: mlp
+  - experiments: large
+  - _self_
+
+seed: 42
+
+hydra:
+  job_logging:
+    version: 1
+    root:
+      level: INFO
+      handlers: [console, file]
+  hydra_logging:
+    level: INFO
+
+results:
+  save_path: "reports/${experiments.experiment_name}/${models.model_name}/${datasets.dataset_name}/"

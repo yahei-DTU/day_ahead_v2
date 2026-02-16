@@ -1,0 +1,17 @@
+_target_: day_ahead_v2.model.XGBoostClassifier
+model_name: "xgboost"
+
+model_parameters:
+  objective: multi:softprob
+  random_state: ${seed}
+
+model_hyperparameters:
+  learning_rate: [0.01, 0.03]        # slower learning → smoother, less overfit
+  max_depth: [2, 3]                  # very shallow trees
+  n_estimators: [300, 500]           # compensate for smaller learning rate
+
+  subsample: [0.6, 0.7]              # more stochastic → reduces memorization
+  colsample_bytree: [0.6, 0.7]       # fewer features per tree → less greedy
+  min_child_weight: [10, 20]         # prevents tiny leaf splits → strong regularization
+  gamma: [1, 2]                      # require significant gain for splits → fewer splits
+  reg_lambda: [10, 20]                # stronger L2 regularization on leaf weights

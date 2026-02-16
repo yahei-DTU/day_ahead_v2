@@ -1,0 +1,19 @@
+_target_: day_ahead_v2.model.GaussianProcessClassifier
+model_name: "gaussian_process"
+
+model_parameters:
+  kernel:
+    _target_: sklearn.gaussian_process.kernels.Product
+    k1:
+      _target_: sklearn.gaussian_process.kernels.ConstantKernel
+      constant_value: 1.0
+      constant_value_bounds: [1e-2, 1e+2]
+    k2:
+      _target_: sklearn.gaussian_process.kernels.RBF
+      length_scale: 1.0
+      length_scale_bounds: [1e-2, 1e+2]
+
+  n_restarts_optimizer: 0
+  random_state: ${seed}
+
+model_hyperparameters: {}
