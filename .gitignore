@@ -13,6 +13,7 @@ submit_hpc_job.sh
 outputs/
 reports/
 hpc_output/
+src/day_ahead_v2/evaluate1.py
 
 docs/site/
 
