@@ -4,11 +4,9 @@ on:
   push:
     paths:
       - "data/**"
-      - "tests/test_data.py"
   pull_request:
     paths:
       - "data/**"
-      - "tests/test_data.py"
 
 jobs:
   validate-data:

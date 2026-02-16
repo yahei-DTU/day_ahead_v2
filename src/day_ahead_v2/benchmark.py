@@ -16,7 +16,7 @@ import hydra
 import logging
 from day_ahead_v2.optimization import ModelBalance, ModelHindsight, ModelBidForecast
 from day_ahead_v2.data import DataHandler
-from day_ahead_v2.train import rolling_windows, split_features_target
+from day_ahead_v2.train import rolling_windows
 from day_ahead_v2.evaluate import calculate_profit
 
 logger = logging.getLogger(__name__)

@@ -24,7 +24,7 @@ from scipy.stats import f_oneway
 from sklearn.preprocessing import LabelEncoder
 from sklearn.feature_selection import mutual_info_regression, mutual_info_classif
 from tabulate import tabulate
-from day_ahead_v2.utils.plot_settings import color_palette_1, color_palette_2
+from day_ahead_v2.utils.plot_settings import color_palette_1
 from day_ahead_v2.data import DataHandler
 
 logger = logging.getLogger(__name__)
