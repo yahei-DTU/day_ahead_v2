@@ -38,7 +38,7 @@ numpy==2.4.1
 packaging==25.0
 paginate==0.5.7
 pandas==2.3.3
-pathspec==1.0.3
+pathspec==1.0.4
 pillow==12.1.0
 platformdirs==4.5.1
 pluggy==1.6.0
