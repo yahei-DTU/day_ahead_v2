@@ -14,6 +14,8 @@ outputs/
 reports/
 hpc_output/
 src/day_ahead_v2/evaluate1.py
+notebooks/
+models/lp_files/
 
 docs/site/
 

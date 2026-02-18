@@ -23,7 +23,7 @@ optimization:
   P_W_tilde: "WindFarm_WindPowerForecast_y"
   model_mapping:
     0: ModelDeficit
-    1: ModelBalance
+    1: ModelBidForecast
     2: ModelSurplus
 
 transform:
@@ -38,7 +38,6 @@ transform:
   drop_missing_threshold: 0.1
   fill_missing:
     method: "forward" # mean, median, mode, forward, backward, interpolate, zero
-    limit: null
   convert_types:
     ImbalanceDirection_DK2: int8
   normalize:

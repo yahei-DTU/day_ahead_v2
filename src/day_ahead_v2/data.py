@@ -775,29 +775,22 @@ class OpenMeteoHandler(DataHandler):
 
 @hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev.yaml")
 def main(cfg: DictConfig) -> None:
-    elspotprices = pd.read_csv("data/raw/Elspotprices.csv", sep=';', decimal=',')
-    elspotprices = elspotprices.drop(columns=['HourDK', 'PriceArea','SpotPriceDKK'], errors='ignore')
-    elspotprices = elspotprices.rename(columns={'SpotPriceEUR': 'SpotPriceEUR_DK1'})
-    print(elspotprices.head())
-    elspotprices["HourUTC"] = pd.to_datetime(elspotprices["HourUTC"], format='%Y-%m-%d %H:%M:%S', utc=True)
-    wind_data = pd.read_csv("data/raw/Enfor_DA_wind_power_forecast.csv")
     wind_data = pd.read_csv("data/raw/Enfor_DA_wind_power_forecast.csv")
     wind_data["Time_begin"] = pd.to_datetime(wind_data["Time_begin"], format='%Y-%m-%d %H:%M:%S', utc=True)
     # check for duplicate Time_begin values
     duplicates = wind_data["Time_begin"].duplicated().sum()
     # print both rows with duplicate Time_begin values
-    print(f"Number of duplicate Time_begin values: {duplicates}")
+    logger.info(f"Number of duplicate Time_begin values: {duplicates}")
+
     # Keep only the first row for each duplicate Time_begin value
     wind_data = wind_data.drop_duplicates(subset='Time_begin', keep='first')
+    wind_data["SettlementPowerMeas"] = wind_data["SettlementPowerMeas"].combine_first(wind_data["SCADAPowerMeas"])
     wind_data = wind_data.drop(columns=['Time_end', 'SCADAPowerMeas','PTime'], errors='ignore')
     wind_data = wind_data.rename(columns={'Time_begin': 'Hour', 'PowerPred': 'WindFarm_WindPowerForecast', 'SettlementPowerMeas': 'WindFarm_ActualWindPower'})
     for col in wind_data.columns:
         if col not in ["Hour", "PTime"]:
             wind_data[col] = pd.to_numeric(wind_data[col],
                                                 errors='coerce')
-    param_data = elspotprices.merge(
-            wind_data, left_on='HourUTC',
-            right_on='Hour', how='left').drop(columns=['Hour'])
 
     imbalance_data = pd.read_parquet("data/processed/imbalance_data.parquet", engine='pyarrow')
     # keep only column ImbalancePriceEUR_DK1
@@ -805,9 +798,11 @@ def main(cfg: DictConfig) -> None:
         imbalance_data["datetime"],
         format='%Y-%m-%d %H:%M:%S%z'
     )
-    full_data = imbalance_data.merge(param_data, left_on='datetime', right_on='HourUTC', how='left').drop(columns=['HourUTC'])
-    full_data.to_csv("data/processed/optimization_parameter.csv", index=False)
-    full_data.to_parquet("data/processed/optimization_parameter.parquet", index=False, engine='pyarrow')
+    imbalance_data = imbalance_data.drop(columns=["WindFarm_ActualWindPower"], errors='ignore')
+    full_data = imbalance_data.merge(wind_data, left_on='datetime', right_on='Hour', how='left').drop(columns=['Hour'])
+    logger.info(full_data.info())
+    full_data.to_csv("data/processed/imbalance_data.csv", index=False)
+    full_data.to_parquet("data/processed/imbalance_data.parquet", index=False, engine='pyarrow')
 
 
 if __name__ == "__main__":

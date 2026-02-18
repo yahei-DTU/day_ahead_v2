@@ -1,6 +1,6 @@
 defaults:
   - datasets: imbalance_data
-  - models: xgboost
+  - models: logistic_regression
   - experiments: large
   - _self_
 

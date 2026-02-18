@@ -3,17 +3,18 @@ experiment_name: "large" # Name of the experiment
 
 # Train parameters
 train_parameters:
-  train_length: 90 # Days of training
+  train_length: 180 # Days of training
   valid_length: 30 # Days of validation
   test_length: 7 # Days of testing
-  n_jobs: 2 # or -1 for all cores
+  n_jobs: 5 # or -1 for all cores
 
 # Model parameters
 experiment_parameters:
   start_date: "2023-02-01" # Start date for training
   end_date: "2024-10-19" # End date for testing
-  decision_threshold_alphas: [0.3, 0.5, 0.7, 0.9] # Thresholds to be tuned for converting probabilities to class labels
+  decision_threshold_alphas: [0.3, 0.4, 0.5, 0.6, 0.7, 0.8] # Thresholds to be tuned for converting probabilities to class labels
 
 # Optimization parameters
 optimization_parameters:
+  electrolyzer_capacity: 0.0
   wind_capacity: 7.2 # MW

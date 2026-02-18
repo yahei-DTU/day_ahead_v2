@@ -127,12 +127,23 @@ def threshold_predictions(cfg, model, proba: np.ndarray, alpha: float) -> pd.Dat
         "uncertain": uncertain
     }, index=range(len(preds)))
 
-def calculate_bids(cfg, data_df: pd.DataFrame, preds_df: pd.DataFrame, optimizers: dict) -> pd.Series:
+def calculate_bids(cfg, data_df: pd.DataFrame, features: pd.DataFrame, preds_df: pd.DataFrame, optimizers: dict) -> pd.Series:
     """Calculate the bids for best optimization parameters"""
+    lambda_max = 1000 # max lambda for bidding curve
+    lambda_step = 2  # step size of bids
     P_W_tilde = data_df[cfg.datasets.optimization.P_W_tilde]
+    if P_W_tilde.isna().any():
+        logger.error(f"{P_W_tilde.isna().sum()} values in P_W_tilde are NaN. Check data preprocessing.")
+        # P_W_tilde.fillna(0, inplace=True)
+    P_W_hat = data_df[cfg.datasets.optimization.P_W_hat]
+    lambda_DA_hat = data_df[cfg.datasets.optimization.lambda_DA_hat]
+    lambda_B_hat = data_df[cfg.datasets.optimization.lambda_B_hat]
+    features = features.copy()
+    features["intercept"] = 1.0
     model_mapping = cfg.datasets.optimization.model_mapping
-    logger.info(f"optimiers: {optimizers}")
+    logger.info(f"optimizers: {optimizers}")
     DA_bids = pd.Series(index=data_df.index, dtype=float)
+    IM_bids = pd.Series(index=data_df.index, dtype=float)
     if preds_df["uncertain"].dtype != bool:
         preds_df["uncertain"] = preds_df["uncertain"].astype(bool)
     for label in np.unique(preds_df["thresholded_label"]):
@@ -140,27 +151,59 @@ def calculate_bids(cfg, data_df: pd.DataFrame, preds_df: pd.DataFrame, optimizer
         model_name = model_mapping[label]
         optimizer = optimizers[model_name]
         if label == cfg.datasets.training.fallback_class:
-            preds_label = preds_df[preds_df["thresholded_label"] == label]
+            preds_label = preds_df[(preds_df["thresholded_label"] == label) | (preds_df["uncertain"])]
         else:
             preds_label = preds_df[
                 (preds_df["thresholded_label"] == label) &
                 (~preds_df["uncertain"])
             ]
         if not preds_label.empty:
-            DA_bids.loc[preds_label.index] = P_W_tilde.loc[preds_label.index] + optimizer.results.x
+            bid_lambda_DA = np.arange(0,lambda_max,lambda_step) # Discretization for bidding curve, actual bids follow from curve
+            bid_p_DA = np.zeros((len(preds_label),len(bid_lambda_DA)))
+            bid_p_DA = pd.DataFrame(bid_p_DA, index=preds_label.index, columns=bid_lambda_DA)
+            if label != cfg.datasets.training.fallback_class:
+                q = optimizer.results.q.copy()
+                q = q.drop('lambda_DA_hat')
+            for t in preds_label.index:
+                # Check for negative prices and handle accordingly
+                if lambda_DA_hat.loc[t] < 0:
+                    logger.warning(f"Negative price detected at time {t}: lambda_DA_hat={lambda_DA_hat.loc[t]}. Setting DA bid to 0.")
+                    DA_bids.loc[t] = 0.0
+                    IM_bids.loc[t] = P_W_hat.loc[t] - DA_bids.loc[t]
+                    if lambda_B_hat.loc[t] < 0:
+                        logger.warning(f"Negative imbalance price detected at time {t}: lambda_B_hat={lambda_B_hat.loc[t]}. Setting IM bid to 0.")
+                        IM_bids.loc[t] = 0.0
+                    continue
+                # Loop through discretized steps of bidding curve to find optimal bid
+                if label == cfg.datasets.training.fallback_class:
+                    DA_bids.loc[t] = P_W_tilde.loc[t]
+                    IM_bids.loc[t] = P_W_hat.loc[t] - DA_bids.loc[t]
+                    continue
+                for k in bid_p_DA.columns:
+                    a_DA = optimizer.results.q["lambda_DA_hat"]
+                    b_DA = features.loc[t,:] @ q
+                    if bid_lambda_DA[k] > lambda_DA_hat.loc[t]:
+                        DA_bids.loc[t] = bid_p_DA.loc[t,k-lambda_step]
+                        IM_bids.loc[t] = P_W_hat.loc[t] - DA_bids.loc[t]
+                        break
+                    bid_p_DA.loc[t,k] = P_W_tilde.loc[t] + np.maximum(np.minimum(a_DA * bid_lambda_DA[k] + b_DA,cfg.experiments.optimization_parameters.wind_capacity),-cfg.experiments.optimization_parameters.electrolyzer_capacity)
+
     # Check if any DA_bids are still NaN (e.g., due to all predictions being uncertain or fallback class)
     if DA_bids.isna().any():
         logger.error(f"{DA_bids.isna().sum()} DA bids are NaN. Check calculate_bids method.")
         DA_bids.fillna(P_W_tilde, inplace=True)
+    if IM_bids.isna().any():
+        logger.error(f"{IM_bids.isna().sum()} IM bids are NaN. Check calculate_bids method.")
+        IM_bids.fillna(0, inplace=True)
 
-    return DA_bids
+    return DA_bids, IM_bids
 
 
-def calculate_profit(DA_bids: pd.Series, lambda_DA_hat: pd.Series, lambda_B_hat: pd.Series, P_W_hat: pd.Series) -> pd.Series:
+def calculate_profit(DA_bids: pd.Series, IM_bids: pd.Series, lambda_DA_hat: pd.Series, lambda_B_hat: pd.Series) -> pd.Series:
     """
     Calculate profit based on realized day-ahead and imbalance prices, realized wind production.
     """
-    profit = DA_bids * lambda_DA_hat + (P_W_hat - DA_bids) * lambda_B_hat
+    profit = DA_bids * lambda_DA_hat + IM_bids * lambda_B_hat
     # Check for NaN values in profit
     if profit.isna().any():
         logger.error(f"{profit.isna().sum()} profit values are NaN. Check calculate_profit method.")

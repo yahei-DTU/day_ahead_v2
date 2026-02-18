@@ -1,6 +1,6 @@
 defaults:
   - datasets: imbalance_data
-  - models: mlp
+  - models: lightgbm
   - experiments: large
   - _self_
 

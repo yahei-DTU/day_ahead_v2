@@ -34,7 +34,7 @@ from pathlib import Path
 from itertools import product
 from joblib import Parallel, delayed
 from day_ahead_v2.data import DataHandler
-from day_ahead_v2.optimization import ModelSurplus, ModelBalance, ModelDeficit
+from day_ahead_v2.optimization import ModelSurplus, ModelBidForecast, ModelDeficit
 from day_ahead_v2.evaluate import evaluate_classifier, compute_accuracy_f1, threshold_predictions, calculate_bids, calculate_profit
 from day_ahead_v2.utils.sanitize_names import sanitize_column_names
 
@@ -307,7 +307,7 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
     # ---------------------------------------------
     # Decision threshold tuning (on validation)
     # --------------------------------------------
-    alphas = cfg.experiments.experiment_parameters.get("decision_threshold_alphas", [0.0])
+    alphas = cfg.experiments.experiment_parameters.get("decision_threshold_alphas", [0.3])
 
     best_alpha = None
     best_profit = -np.inf
@@ -316,7 +316,7 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
     model_mapping = cfg.datasets.optimization.model_mapping
     MODEL_REGISTRY = {
         "ModelSurplus": ModelSurplus,
-        "ModelBalance": ModelBalance,
+        "ModelBidForecast": ModelBidForecast,
         "ModelDeficit": ModelDeficit,
     }
     X_train_full = pd.concat([X_train, X_val])
@@ -335,7 +335,20 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
             logger.info(f"Optimizing for label {label_} with alpha={alpha}...")
             datetime_index = X_[X_["thresholded_label"] == label_].index
             logger.info(f"Found {len(datetime_index)} samples for predicted label {label_} in train + val set.")
+            if len(datetime_index) <= 50: # Require at least 50 samples for optimization to avoid convergence issues and unreliable results
+                failed_alpha = True
+                logger.warning(f"Less than 50 samples for label {label_}. Skipping optimization for this alpha={alpha}.")
+                break
             data_optimization = data_handler.data.loc[datetime_index]
+            X_features = X_train_full.loc[datetime_index]
+            # no negative prices
+            # datetime_index_without_negative_prices = data_optimization[data_optimization[cfg.datasets.optimization.lambda_DA_hat] >= 0].index
+            # if len(datetime_index_without_negative_prices) < len(datetime_index):
+            #     logger.warning(
+            #         f"Found {len(datetime_index) - len(datetime_index_without_negative_prices)} samples with negative day-ahead prices for label {label_}. These samples will be excluded from optimization."
+            #     )
+            # data_optimization = data_optimization.loc[datetime_index_without_negative_prices]
+            # X_features = X_train_full.loc[datetime_index_without_negative_prices]
             lambda_DA_hat = data_optimization[cfg.datasets.optimization.lambda_DA_hat]
             lambda_B_hat = data_optimization[cfg.datasets.optimization.lambda_B_hat]
             P_W_hat = data_optimization[cfg.datasets.optimization.P_W_hat]
@@ -348,7 +361,9 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
                 lambda_B_hat=lambda_B_hat,
                 P_W_hat=P_W_hat,
                 P_W_tilde=P_W_tilde,
+                X_features = X_features,
             )
+            optimizer.build_model()
             # Save LP file for debugging
             root = Path(__file__).resolve().parent.parent.parent
             save_path = root / "models" / "lp_files" / f"model_alpha{alpha}_label{label_}.lp"
@@ -434,24 +449,26 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
     datetime_index_test = X_test.index
     data_train = data_handler.data.loc[datetime_index_train]
     data_test = data_handler.data.loc[datetime_index_test]
-    bids_train = calculate_bids(cfg, data_train, final_preds_train_df, best_optimizers)
-    bids_test = calculate_bids(cfg, data_test, final_preds_test_df, best_optimizers)
+    DA_bids_train, IM_bids_train = calculate_bids(cfg, data_train, X_train_full, final_preds_train_df, best_optimizers)
+    DA_bids_test, IM_bids_test = calculate_bids(cfg, data_test, X_test, final_preds_test_df, best_optimizers)
 
     # Calculate profit for train and test sets
     lambda_DA_hat_train = data_train[cfg.datasets.optimization.lambda_DA_hat]
     lambda_B_hat_train = data_train[cfg.datasets.optimization.lambda_B_hat]
-    P_W_hat_train = data_train[cfg.datasets.optimization.P_W_hat]
-    profit_train = calculate_profit(bids_train, lambda_DA_hat_train, lambda_B_hat_train, P_W_hat_train)
+    profit_train = calculate_profit(DA_bids_train, IM_bids_train, lambda_DA_hat_train, lambda_B_hat_train)
     lambda_DA_hat_test = data_test[cfg.datasets.optimization.lambda_DA_hat]
     lambda_B_hat_test = data_test[cfg.datasets.optimization.lambda_B_hat]
-    P_W_hat_test = data_test[cfg.datasets.optimization.P_W_hat]
-    profit_test = calculate_profit(bids_test, lambda_DA_hat_test, lambda_B_hat_test, P_W_hat_test)
-
+    profit_test = calculate_profit(DA_bids_test, IM_bids_test, lambda_DA_hat_test, lambda_B_hat_test)
     # Add bids and profit to results dfs
-    train_results_df["DA_bid"] = bids_train
+    train_results_df["DA_bid"] = DA_bids_train
+    train_results_df["IM_bid"] = IM_bids_train
     train_results_df["profit"] = profit_train
-    test_results_df["DA_bid"] = bids_test
+    test_results_df["DA_bid"] = DA_bids_test
+    test_results_df["IM_bid"] = IM_bids_test
     test_results_df["profit"] = profit_test
+    for optimizer in best_optimizers.values():
+        assert optimizer.results.z.index.isin(train_results_df.index).all()
+        train_results_df["bid_adjustment_z"] = optimizer.results.z
     # ---------------------------------------------
     # Collect results
     # ---------------------------------------------
@@ -473,8 +490,6 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
         "best_alpha": best_alpha,
         **best_params,
     }
-    for optimizer_name, optimizer in best_optimizers.items():
-        results[f"optimizer_{optimizer_name}_x"] = optimizer.results.x
 
     return final_model, results, train_results_df, test_results_df
 
@@ -580,7 +595,7 @@ def run_backtest(cfg: DictConfig) -> list:
         "test_profit_mean": mean_profit_test,
     }
     logger.info("Backtest completed.")
-    return all_results, avg_metrics, avg_metrics_thresholded
+    return all_results, avg_metrics, avg_metrics_thresholded, all_test_results_dfs
 
 @hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev")
 def main(cfg: DictConfig) -> None:
@@ -589,7 +604,7 @@ def main(cfg: DictConfig) -> None:
     random.seed(seed)
     np.random.seed(seed)
 
-    results, metrics, metrics_thresholded = run_backtest(cfg)
+    results, metrics, metrics_thresholded, all_test_results_dfs = run_backtest(cfg)
 
     if not results:
         logger.warning("No results generated")
@@ -612,6 +627,10 @@ def main(cfg: DictConfig) -> None:
     with open(save_path / "allwindows_metrics_thresholded.txt", "w") as f:
         for key, value in metrics_thresholded.items():
             f.write(f"{key}: {value}\n")
+
+    # Save all test results to a CSV file
+    all_test_results_dfs.to_csv(save_path / "all_test_results_hourly.csv", index=True)
+    logger.info(f"All test results saved to {save_path / 'all_test_results_hourly.csv'}")
 
     logger.info("Experiment finished successfully")
 
