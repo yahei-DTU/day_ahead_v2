@@ -19,6 +19,7 @@ import hydra
 from typing import Dict, Any
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 import openmeteo_requests
 import requests_cache
 from retry_requests import retry
@@ -261,6 +262,7 @@ class DataHandler:
         self._fill_missing(df, cfg.datasets, log)
         self._convert_types(df, cfg.datasets, log)
         self._normalize_columns(df, cfg.datasets, log)
+        self._hot_encode(df, cfg.datasets, log)
         self._to_dtype_float32(df)
 
         return self._build_new_handler(df, log)
@@ -290,21 +292,21 @@ class DataHandler:
             # Convert OmegaConf -> dict
             mapping_dict = dict(mapping)
 
-            # Convert mapping keys & values to int (robust to string/numeric columns)
+            # Keep keys as-is (usually strings), cast values to int
             try:
-                mapping_int = {int(k): int(v) for k, v in mapping_dict.items()}
+                mapping_clean = {str(k): int(v) for k, v in mapping_dict.items()}
             except ValueError as e:
                 raise ValueError(
                     f"Invalid label mapping for column '{column}'. "
-                    f"Keys and values must be castable to int."
+                    f"Values must be castable to int."
                 ) from e
 
-            # Convert column to numeric (safe even if already numeric)
-            series = pd.to_numeric(df[column], errors="coerce")
+            # Work directly on original column (no numeric conversion)
+            series = df[column].astype(str)
 
             # Check for unseen labels
             unique_labels = set(series.dropna().unique())
-            expected_labels = set(mapping_int.keys())
+            expected_labels = set(mapping_clean.keys())
             unseen = unique_labels - expected_labels
 
             if unseen:
@@ -314,11 +316,11 @@ class DataHandler:
                 )
 
             # Apply mapping
-            df[column] = series.map(mapping_int).astype("int64")
+            df[column] = series.map(mapping_clean).astype("int64")
 
             msg = (
                 f"Applied label mapping to '{column}': "
-                f"{mapping_int}"
+                f"{mapping_clean}"
             )
             log.append(msg)
 
@@ -516,8 +518,56 @@ class DataHandler:
         else:
             logger.info("All columns are numeric/boolean and converted to float32.")
 
+    def _hot_encode(self, df: pd.DataFrame, cfg: DictConfig, log: list[str]) -> None:
+        """
+        One-hot encode specified categorical columns.
 
+        Args:
+            df (pd.DataFrame): DataFrame to modify in-place
+            cfg (DictConfig): Transformation config section
+            log (list[str]): Transformation log
+        """
+        cols = cfg.transform.get("hot_encode", {}).get("columns")
 
+        if not cols:
+            return
+
+        existing = [c for c in cols if c in df.columns]
+        missing = [c for c in cols if c not in df.columns]
+
+        if not existing:
+            log.append("No valid columns found for one-hot encoding.")
+            return
+
+        # Perform one-hot encoding
+        df_encoded = pd.get_dummies(
+            df[existing],
+            prefix=existing,
+            drop_first=False,
+            dtype="float32",
+        )
+
+        # Drop original columns
+        df.drop(columns=existing, inplace=True)
+
+        # Join encoded columns
+        df[df_encoded.columns] = df_encoded
+
+        log.append(f"One-hot encoded columns: {existing}")
+        log.append(f"Created columns: {list(df_encoded.columns)}")
+
+        if missing:
+            log.append(f"Skipped missing columns for one-hot encoding: {missing}")
+
+        # If one-hot encoded columns are in feature_columns, update the config
+        if hasattr(cfg.training, "feature_columns") and cfg.training.feature_columns:
+            # Remove original columns
+            cfg.training.feature_columns = [
+                col for col in cfg.training.feature_columns if col not in existing
+            ]
+            # Add new one-hot columns
+            cfg.training.feature_columns.extend(df_encoded.columns.tolist())
+            log.append(f"Updated feature_columns in config: removed {existing}, added {list(df_encoded.columns)}")
 
     def _build_new_handler(self, df: pd.DataFrame, log: list[str]) -> "DataHandler":
         """Build a new DataHandler instance from a transformed DataFrame."""
@@ -775,45 +825,12 @@ class OpenMeteoHandler(DataHandler):
 
 @hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev.yaml")
 def main(cfg: DictConfig) -> None:
-    wind_data = pd.read_csv("data/raw/Enfor_DA_wind_power_forecast.csv")
-    wind_data["Time_begin"] = pd.to_datetime(wind_data["Time_begin"], format='%Y-%m-%d %H:%M:%S', utc=True)
-    # check for duplicate Time_begin values
-    duplicates = wind_data["Time_begin"].duplicated().sum()
-    # print both rows with duplicate Time_begin values
-    logger.info(f"Number of duplicate Time_begin values: {duplicates}")
-
-    # Keep only the first row for each duplicate Time_begin value
-    wind_data = wind_data.drop_duplicates(subset='Time_begin', keep='first')
-    wind_data["SettlementPowerMeas"] = wind_data["SettlementPowerMeas"].combine_first(wind_data["SCADAPowerMeas"])
-    wind_data = wind_data.drop(columns=['Time_end', 'SCADAPowerMeas','PTime'], errors='ignore')
-    wind_data = wind_data.rename(columns={'Time_begin': 'Hour', 'PowerPred': 'WindFarm_WindPowerForecast', 'SettlementPowerMeas': 'WindFarm_ActualWindPower'})
-    for col in wind_data.columns:
-        if col not in ["Hour", "PTime"]:
-            wind_data[col] = pd.to_numeric(wind_data[col],
-                                                errors='coerce')
-
-    imbalance_data = pd.read_parquet("data/processed/imbalance_data.parquet", engine='pyarrow')
-    # keep only column ImbalancePriceEUR_DK1
-    imbalance_data["datetime"] = pd.to_datetime(
-        imbalance_data["datetime"],
-        format='%Y-%m-%d %H:%M:%S%z'
-    )
-    imbalance_data = imbalance_data.drop(columns=["WindFarm_ActualWindPower"], errors='ignore')
-    full_data = imbalance_data.merge(wind_data, left_on='datetime', right_on='Hour', how='left').drop(columns=['Hour'])
-    logger.info(full_data.info())
-    full_data.to_csv("data/processed/imbalance_data.csv", index=False)
-    full_data.to_parquet("data/processed/imbalance_data.parquet", index=False, engine='pyarrow')
+    pass
 
 
 if __name__ == "__main__":
     main()
-
-    sys.exit()
-    # Create an empty DataFrame with hourly datetime index
-    features_df = pd.DataFrame()
-    features_df["datetime"] = pd.date_range(start='2023-01-01',
-                                            end='2025-09-22',
-                                            freq='h', tz='UTC')
+    sys.exit(0)
 
     ###########################################################################
 

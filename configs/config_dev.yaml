@@ -1,7 +1,7 @@
 defaults:
   - datasets: imbalance_data
-  - models: logistic_regression
-  - experiments: large
+  - models: xgboost
+  - experiments: small
   - _self_
 
 seed: 42

@@ -1,7 +1,7 @@
 defaults:
   - datasets: imbalance_data
   - models: lightgbm
-  - experiments: large
+  - experiments: small
   - _self_
 
 seed: 42

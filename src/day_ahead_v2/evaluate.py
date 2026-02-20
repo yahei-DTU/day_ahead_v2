@@ -37,13 +37,13 @@ def evaluate_classifier(model, X: pd.DataFrame = None, y: pd.Series = None) -> T
 
     # ROC-AUC
     try:
-        auc = roc_auc_score(y.values, proba, average="macro", multi_class="ovr")
+        auc = roc_auc_score(y.values, proba[:, 1])
     except ValueError as e:
         auc = np.nan
         logger.warning(f"ROC-AUC could not be computed: {e}")
     # F1 score (macro)
     try:
-        f1 = f1_score(y.values, preds, average="macro")
+        f1 = f1_score(y.values, preds)
     except ValueError as e:
         f1 = np.nan
         logger.warning(f"F1 score could not be computed: {e}")
@@ -86,7 +86,7 @@ def compute_accuracy_f1(y_true: pd.Series, y_pred: pd.Series) -> Dict[str, float
 
     return metrics
 
-def threshold_predictions(cfg, model, proba: np.ndarray, alpha: float) -> pd.DataFrame:
+def threshold_predictions(cfg, proba: np.ndarray, alpha: float) -> pd.DataFrame:
     """
     Make predictions using the trained model.
 
@@ -102,23 +102,18 @@ def threshold_predictions(cfg, model, proba: np.ndarray, alpha: float) -> pd.Dat
     logger.info(f"Applying decision threshold alpha={alpha} for predictions.")
     preds = np.zeros_like(proba, dtype=int)
     n_samples = proba.shape[0]
-    # Determine fallback index
-    fallback_class = cfg.datasets.training.fallback_class  # Fallback to class
-    fallback_class = fallback_class = np.float32(fallback_class)
-    if fallback_class not in model.classes_:
-        raise ValueError(f"Fallback class {fallback_class} not in model.classes_: {model.classes_}")
-    fallback_idx = np.where(model.classes_ == fallback_class)[0][0]
 
     uncertain = np.zeros(n_samples, dtype=bool)
     for i in range(n_samples):
         argmax = proba[i].argmax()
-        if proba[i, argmax] >= alpha:
-            preds[i, argmax] = 1
-        else:
-            preds[i, fallback_idx] = 1
+        preds[i, argmax] = 1  # Assign predicted class based on highest probability
+        if proba[i, argmax] < alpha:
             uncertain[i] = True
 
     preds = preds.argmax(axis=1)
+    # if uncertain set to fallback class
+    fallback_class = cfg.datasets.training.fallback_class
+    preds[uncertain] = fallback_class
     logger.info(f"Total uncertain predictions: {uncertain.sum()} out of {n_samples} ({(uncertain.sum() / n_samples) * 100:.2f}%) -  (alpha={alpha})")
 
     # return df with preds and uncertain flag

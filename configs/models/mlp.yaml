@@ -3,7 +3,6 @@ model_name: "mlp"
 
 model_parameters:
   input_dim: null              # set programmatically from X.shape[1]
-  output_dim: 3                # classes: -1, 0, 1
   activation: relu
   batch_size: 64
   max_epochs: 100

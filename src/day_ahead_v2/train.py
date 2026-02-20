@@ -235,16 +235,19 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
     data_train = data_handler.cut_data(train_start, train_end, cfg.datasets.training.datetime_column)
     logger.debug("Splitting features and target for training data...")
     X_train, y_train = split_features_target(cfg, data_train.data)
+    logger.info(f"Target counts in training data:\n{y_train.value_counts()}")
 
     logger.debug("Cutting validation data...")
     data_valid = data_handler.cut_data(valid_start, valid_end, cfg.datasets.training.datetime_column)
     logger.debug("Splitting features and target for validation data...")
     X_val, y_val = split_features_target(cfg, data_valid.data)
+    logger.info(f"Target counts in validation data:\n{y_val.value_counts()}")
 
     logger.debug("Cutting test data...")
     data_test = data_handler.cut_data(test_start, test_end, cfg.datasets.training.datetime_column)
     logger.debug("Splitting features and target for test data...")
     X_test, y_test = split_features_target(cfg, data_test.data)
+    logger.info(f"Target counts in test data:\n{y_test.value_counts()}")
 
     # ---------------------------------------------
     # Hyperparameter tuning (on validation)
@@ -307,7 +310,7 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
     # ---------------------------------------------
     # Decision threshold tuning (on validation)
     # --------------------------------------------
-    alphas = cfg.experiments.experiment_parameters.get("decision_threshold_alphas", [0.3])
+    alphas = cfg.experiments.experiment_parameters.get("decision_threshold_alphas", [0.5])
 
     best_alpha = None
     best_profit = -np.inf
@@ -320,27 +323,29 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
         "ModelDeficit": ModelDeficit,
     }
     X_train_full = pd.concat([X_train, X_val])
-    best_train_val_results_df = pd.concat([best_train_results_df,best_val_results_df])
+    # best_train_val_results_df = pd.concat([best_train_results_df,best_val_results_df])
     for alpha in alphas:
-        threshold_preds_df = threshold_predictions(cfg, best_model, best_train_val_results_df.filter(like="proba_class_").to_numpy(), alpha)
-        X_ = X_train_full.copy()
+        threshold_preds_df = threshold_predictions(cfg, best_val_results_df.filter(like="proba_class_").to_numpy(), alpha)
+        X_ = X_val.copy()
         # Set index of threshold_preds_df to match X_
         threshold_preds_df.index = X_.index
         X_["thresholded_label"] = threshold_preds_df["thresholded_label"]
+        X_["uncertain"] = threshold_preds_df["uncertain"]
         tot_profit_alpha = 0
         optimizers_alpha = {}
         failed_alpha = False
         logger.debug(f"Optimizing for alpha={alpha} with predicted labels: {threshold_preds_df['thresholded_label'].unique()}")
-        for label_ in best_model.classes_:
+        del threshold_preds_df
+        for label_ in X_["thresholded_label"].unique():
             logger.info(f"Optimizing for label {label_} with alpha={alpha}...")
             datetime_index = X_[X_["thresholded_label"] == label_].index
-            logger.info(f"Found {len(datetime_index)} samples for predicted label {label_} in train + val set.")
-            if len(datetime_index) <= 50: # Require at least 50 samples for optimization to avoid convergence issues and unreliable results
+            logger.info(f"Found {len(datetime_index)} samples for predicted label {label_} in validation set.")
+            if len(datetime_index) < 50: # Require at least 50 samples for optimization to avoid convergence issues and unreliable results
                 failed_alpha = True
                 logger.warning(f"Less than 50 samples for label {label_}. Skipping optimization for this alpha={alpha}.")
                 break
             data_optimization = data_handler.data.loc[datetime_index]
-            X_features = X_train_full.loc[datetime_index]
+            X_features = X_val.loc[datetime_index]
             # no negative prices
             # datetime_index_without_negative_prices = data_optimization[data_optimization[cfg.datasets.optimization.lambda_DA_hat] >= 0].index
             # if len(datetime_index_without_negative_prices) < len(datetime_index):
@@ -348,7 +353,7 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
             #         f"Found {len(datetime_index) - len(datetime_index_without_negative_prices)} samples with negative day-ahead prices for label {label_}. These samples will be excluded from optimization."
             #     )
             # data_optimization = data_optimization.loc[datetime_index_without_negative_prices]
-            # X_features = X_train_full.loc[datetime_index_without_negative_prices]
+            # X_features = X_val.loc[datetime_index_without_negative_prices]
             lambda_DA_hat = data_optimization[cfg.datasets.optimization.lambda_DA_hat]
             lambda_B_hat = data_optimization[cfg.datasets.optimization.lambda_B_hat]
             P_W_hat = data_optimization[cfg.datasets.optimization.P_W_hat]
@@ -383,11 +388,14 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
                 )
                 failed_alpha = True
                 break
+            logger.info(f"Profit per sample for label {label_} with alpha={alpha}: {optimizer.results.objective_value / len(datetime_index):.2f}")
             tot_profit_alpha += optimizer.results.objective_value
             optimizers_alpha[model_name] = optimizer
+
         if failed_alpha:
             logger.warning(f"Skipping alpha={alpha} due to optimization failure.")
             continue
+        logger.info(f"Total profit for alpha={alpha}: {tot_profit_alpha:.2f}")
         if tot_profit_alpha > best_profit:
             best_profit = tot_profit_alpha
             best_alpha = alpha
@@ -415,8 +423,8 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
         metrics_threshold_prediction_train = {}
         metrics_threshold_prediction_test = {}
     else:
-        final_preds_train_df = threshold_predictions(cfg, final_model, train_results_df.filter(like="proba_class_").to_numpy(), best_alpha)
-        final_preds_test_df = threshold_predictions(cfg, final_model, test_results_df.filter(like="proba_class_").to_numpy(), best_alpha)
+        final_preds_train_df = threshold_predictions(cfg, train_results_df.filter(like="proba_class_").to_numpy(), best_alpha)
+        final_preds_test_df = threshold_predictions(cfg, test_results_df.filter(like="proba_class_").to_numpy(), best_alpha)
         # reset index of final_preds_train_df and final_preds_test_df to match train_results_df and test_results_df
         final_preds_train_df.index = train_results_df.index
         final_preds_test_df.index = test_results_df.index
@@ -535,9 +543,10 @@ def run_backtest(cfg: DictConfig) -> list:
             all_train_results_dfs["true_label"].to_numpy(),
             all_train_results_dfs["predicted_label"].to_numpy()
         )
+        all_train_results_dfs_certain = all_train_results_dfs[~all_train_results_dfs["uncertain"]]
         avg_metrics_thresholded_train = compute_accuracy_f1(
-            all_train_results_dfs["true_label"].to_numpy(),
-            all_train_results_dfs["thresholded_label"].to_numpy()
+            all_train_results_dfs_certain["true_label"].to_numpy(),
+            all_train_results_dfs_certain["thresholded_label"].to_numpy()
         )
         for key, value in avg_metrics_train.items():
             logger.info(f"Average {key} over all windows: {value}")
@@ -559,9 +568,10 @@ def run_backtest(cfg: DictConfig) -> list:
             all_test_results_dfs["true_label"].to_numpy(),
             all_test_results_dfs["predicted_label"].to_numpy()
         )
+        all_test_results_dfs_certain = all_test_results_dfs[~all_test_results_dfs["uncertain"]]
         avg_metrics_thresholded_test = compute_accuracy_f1(
-            all_test_results_dfs["true_label"].to_numpy(),
-            all_test_results_dfs["thresholded_label"].to_numpy()
+            all_test_results_dfs_certain["true_label"].to_numpy(),
+            all_test_results_dfs_certain["thresholded_label"].to_numpy()
         )
         for key, value in avg_metrics_test.items():
             logger.info(f"Average {key} over all windows: {value}")

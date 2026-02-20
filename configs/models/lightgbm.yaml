@@ -2,8 +2,6 @@ _target_: day_ahead_v2.model.LightGBMClassifier
 model_name: "lightgbm"
 
 model_parameters:
-  objective: multiclass
-  num_class: 3
   n_estimators: 500                  # increase trees to compensate for smaller learning rate
   min_child_samples: 20              # prevent tiny leaves
   subsample: 0.7                     # row sampling → reduces memorization
@@ -20,5 +18,5 @@ model_parameters:
 
 model_hyperparameters:
   learning_rate: [0.01, 0.03]        # slower learning → smoother generalization
-  num_leaves: [7, 15]                # smaller trees → fewer splits
-  max_depth: [2, 3]                  # shallow trees → reduce memorization
+  num_leaves: [7, 15, 31]            # smaller trees → fewer splits
+  max_depth: [2, 3, 5]               # shallow trees → reduce memorization

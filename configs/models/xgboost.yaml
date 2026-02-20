@@ -2,7 +2,6 @@ _target_: day_ahead_v2.model.XGBoostClassifier
 model_name: "xgboost"
 
 model_parameters:
-  objective: multi:softprob
   random_state: ${seed}
 
 model_hyperparameters:

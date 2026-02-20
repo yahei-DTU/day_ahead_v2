@@ -130,8 +130,6 @@ class LightGBMClassifier(lgb.LGBMClassifier):
 
     def __init__(
         self,
-        objective: str = "multiclass",
-        num_class: int = 3,
         learning_rate: float = 0.05,
         n_estimators: int = 200,
         max_depth: int = -1,
@@ -142,8 +140,7 @@ class LightGBMClassifier(lgb.LGBMClassifier):
         **kwargs,
     ):
         super().__init__(
-            objective=objective,
-            num_class=num_class,
+            objective="binary",
             learning_rate=learning_rate,
             n_estimators=n_estimators,
             max_depth=max_depth,
@@ -196,7 +193,6 @@ class XGBoostClassifier(xgb.XGBClassifier):
 
     def __init__(
         self,
-        objective: str = "multi:softprob",
         learning_rate: float = 0.03,
         n_estimators: int = 500,
         max_depth: int = 3,
@@ -207,7 +203,7 @@ class XGBoostClassifier(xgb.XGBClassifier):
         **kwargs,
     ):
         super().__init__(
-            objective=objective,
+            objective="binary:logistic",
             learning_rate=learning_rate,
             n_estimators=n_estimators,
             max_depth=max_depth,
@@ -262,7 +258,6 @@ class MLPClassifier(nn.Module):
     def __init__(
         self,
         input_dim: int,
-        output_dim: int,
         hidden_dims: list[int],
         activation: str = "relu",
         dropout: float = 0.2,
@@ -291,7 +286,7 @@ class MLPClassifier(nn.Module):
             layers.append(act_fn())
             layers.append(nn.Dropout(dropout))
             prev_dim = h
-        layers.append(nn.Linear(prev_dim, output_dim))
+        layers.append(nn.Linear(prev_dim, 1))
         self.model = nn.Sequential(*layers).to(device)
 
         logger.info(f"MLPClassifier initialized with architecture: {self.model}")
@@ -326,9 +321,9 @@ class MLPClassifier(nn.Module):
 
         # Convert y to tensor
         if isinstance(y, pd.Series):
-            y = torch.tensor(y.values, dtype=torch.long)
+            y = torch.tensor(y.values, dtype=torch.float32)
         elif isinstance(y, np.ndarray):
-            y = torch.tensor(y, dtype=torch.long)
+            y = torch.tensor(y, dtype=torch.float32)
 
         # Set classes_ attribute
         self.classes_ = torch.unique(y).sort()[0].cpu().numpy()
@@ -338,10 +333,14 @@ class MLPClassifier(nn.Module):
         if X.shape[1] != self.model[0].in_features:
             raise ValueError(f"Input feature dimension {X.shape[1]} does not match model expected dimension {self.model[0].in_features}.")
 
-        dataset = TensorDataset(X, y)
+        # Ensure labels are 0/1
+        if not torch.all((y == 0) | (y == 1)):
+            raise ValueError("Binary labels must be 0 and 1.")
+
+        dataset = TensorDataset(X, y.unsqueeze(1))  # Ensure y is of shape (n_samples, 1)
         loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=False)
 
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.BCEWithLogitsLoss()
         optimizer = (optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
                      if self.optimizer == "Adam"
                      else optim.SGD(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay))
@@ -350,10 +349,7 @@ class MLPClassifier(nn.Module):
         patience_counter = 0
 
         # Choose iterator based on verbose
-        if self.verbose == 1:
-            iterator = trange(self.max_epochs, desc="Training")
-        else:
-            iterator = range(self.max_epochs)
+        iterator = trange(self.max_epochs, desc="Training") if self.verbose == 1 else range(self.max_epochs)
 
         for epoch in iterator:
             epoch_loss = 0.0
@@ -361,10 +357,11 @@ class MLPClassifier(nn.Module):
             for batch_X, batch_y in loader:
                 batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
                 optimizer.zero_grad()
-                output = self(batch_X)
-                loss = criterion(output, batch_y)
+                logits = self(batch_X)
+                loss = criterion(logits, batch_y)
                 loss.backward()
                 optimizer.step()
+
                 epoch_loss += loss.item() * batch_X.size(0)
 
             epoch_loss /= len(loader.dataset)
@@ -401,7 +398,10 @@ class MLPClassifier(nn.Module):
             X = torch.tensor(X, dtype=torch.float32)
         with torch.no_grad():
             logits = self(X.to(self.device))
-            return torch.softmax(logits, dim=1).cpu().numpy()
+            probs_pos = torch.sigmoid(logits)
+            probs_neg = 1 - probs_pos
+            probs = torch.cat([probs_neg, probs_pos], dim=1)
+            return probs.cpu().numpy()
 
 
     def predict(self, X: torch.Tensor | np.ndarray | pd.DataFrame) -> np.ndarray:
@@ -421,4 +421,5 @@ class MLPClassifier(nn.Module):
             X = torch.tensor(X, dtype=torch.float32)
         with torch.no_grad():
             logits = self(X.to(self.device))
-            return logits.argmax(dim=1).cpu().numpy()
+            probs = torch.sigmoid(logits)
+            return (probs >= 0.5).long().cpu().numpy().flatten()

@@ -23,23 +23,28 @@ optimization:
   P_W_tilde: "WindFarm_WindPowerForecast_y"
   model_mapping:
     0: ModelDeficit
-    1: ModelBidForecast
-    2: ModelSurplus
+    1: ModelSurplus
+    2: ModelBidForecast
 
 transform:
   label_mapping:
     ImbalanceDirection_DK1:
-      "-1": 0
-      "0": 1
-      "1": 2
+      Deficit: 0
+      Surplus: 1
   drop_columns:
+    - ImbalanceDirection_DK2
+    - ImbalancePriceEUR_DK2
+    - ImbalanceMWh_DK2
   rename_columns:
+  hot_encode:
+    columns:
+    - ImbalanceDirection_DK2_Lag48
+    - ImbalanceDirection_DK1_Lag48
   drop_duplicates: true
   drop_missing_threshold: 0.1
   fill_missing:
     method: "forward" # mean, median, mode, forward, backward, interpolate, zero
   convert_types:
-    ImbalanceDirection_DK2: int8
   normalize:
     method: "zscore" # minmax, zscore
     columns:
@@ -195,7 +200,7 @@ transform:
 training:
   datetime_column: datetime
   target_column: ImbalanceDirection_DK1
-  fallback_class: 1
+  fallback_class: 2
   feature_columns:
     - ImbalanceDirection_DK2_Lag48
     - ImbalanceDirection_DK1_Lag48
