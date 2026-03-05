@@ -1,7 +1,7 @@
 defaults:
-  - datasets: imbalance_data
-  - models: xgboost
-  - experiments: small
+  - datasets: data2025
+  - models: lightgbm
+  - experiments: new2025
   - _self_
 
 seed: 42

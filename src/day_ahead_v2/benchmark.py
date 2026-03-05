@@ -11,22 +11,31 @@ Dependencies: pandas, os, typing, pathlib, data_validation
 """
 
 from pathlib import Path
+import numpy as np
 import pandas as pd
 import hydra
 import logging
 from day_ahead_v2.optimization import ModelHindsight
-from day_ahead_v2.data import DataHandler
+from day_ahead_v2.data import PandasHandler
 from day_ahead_v2.train import rolling_windows
 from day_ahead_v2.evaluate import calculate_profit
 
 logger = logging.getLogger(__name__)
+
+def simulate_ar1_errors(index, phi, sigma, initial_error):
+    errors = np.zeros(len(index))
+    errors[0] = initial_error
+    for i in range(1, len(index)):
+        eps = np.random.normal(0, sigma)
+        errors[i] = phi * errors[i-1] + eps
+    return pd.Series(errors, index=index)
 
 @hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev")
 def main(cfg):
     # ---------------------------------------------
     # Import dataset
     # ---------------------------------------------
-    data_handler = DataHandler(cfg)
+    data_handler = PandasHandler(cfg)
     data_handler = data_handler.cut_data(cfg.experiments.experiment_parameters.start_date,
                                         cfg.experiments.experiment_parameters.end_date,
                                         cfg.datasets.training.datetime_column,
@@ -45,10 +54,13 @@ def main(cfg):
     # ---------------------------------------------
     all_results_hindsight = []
     all_results_bid_forecast = []
+    all_results_bid_worse_forecast = []
     all_train_results_dfs_hindsight = pd.DataFrame()
     all_test_results_dfs_hindsight = pd.DataFrame()
     all_train_results_dfs_bid_forecast = pd.DataFrame()
     all_test_results_dfs_bid_forecast = pd.DataFrame()
+    all_train_results_dfs_bid_worse_forecast = pd.DataFrame()
+    all_test_results_dfs_bid_worse_forecast = pd.DataFrame()
 
     for window in rolling_windows(cfg):
 
@@ -152,6 +164,7 @@ def main(cfg):
         all_results_hindsight.append(results_hindsight)
         all_train_results_dfs_hindsight = pd.concat([all_train_results_dfs_hindsight, results_hindsight_train_df])
         all_test_results_dfs_hindsight = pd.concat([all_test_results_dfs_hindsight, results_hindsight_test_df])
+        del DA_bids_train, IM_bids_train, DA_bids_test, IM_bids_test, profit_train, profit_test
         # ------------------------------------- Model 2 - Bid Forecast -------------------------------------
         logger.debug("Running Bid Forecast Model...")
         DA_bids_train = pd.Series(index=data_train.index, dtype=float)
@@ -168,7 +181,10 @@ def main(cfg):
                 continue
             DA_bids_train.loc[t] = P_W_tilde_train.loc[t]
             IM_bids_train.loc[t] = P_W_hat_train.loc[t] - DA_bids_train.loc[t]
+        profit_train = calculate_profit(DA_bids_train, IM_bids_train, lambda_DA_hat_train, lambda_B_hat_train)
 
+        DA_bids_test = pd.Series(index=data_test.index, dtype=float)
+        IM_bids_test = pd.Series(index=data_test.index, dtype=float)
         for t in data_test.index:
             # Check for negative prices and handle accordingly
             if lambda_DA_hat_test.loc[t] < 0:
@@ -181,8 +197,8 @@ def main(cfg):
                 continue
             DA_bids_test.loc[t] = P_W_tilde_test.loc[t]
             IM_bids_test.loc[t] = P_W_hat_test.loc[t] - DA_bids_test.loc[t]
-        profit_train = calculate_profit(DA_bids_train, IM_bids_train, lambda_DA_hat_train, lambda_B_hat_train)
         profit_test = calculate_profit(DA_bids_test, IM_bids_test, lambda_DA_hat_test, lambda_B_hat_test)
+
         # Add bids and profit to results dfs
         results_bid_forecast_train_df = pd.DataFrame({
             "DA_bid": DA_bids_train,
@@ -220,6 +236,107 @@ def main(cfg):
         all_results_bid_forecast.append(results_bid_forecast)
         all_train_results_dfs_bid_forecast = pd.concat([all_train_results_dfs_bid_forecast, results_bid_forecast_train_df])
         all_test_results_dfs_bid_forecast = pd.concat([all_test_results_dfs_bid_forecast, results_bid_forecast_test_df])
+        del DA_bids_train, IM_bids_train, DA_bids_test, IM_bids_test, profit_train, profit_test
+        # ------------------------------------- Model 3 - Bid Worse Forecast -------------------------------------
+        logger.debug("Running Bid Worse Forecast Model...")
+
+        # --- 1. Compute original forecast error ---
+        error_train = P_W_tilde_train - P_W_hat_train
+        error_test = P_W_tilde_test - P_W_hat_test
+
+        # --- 2. Rescale error ---
+        alpha = 5   # >1 makes forecast worse
+
+        P_W_tilde_worse_train = P_W_hat_train + alpha
+        P_W_tilde_worse_test  = P_W_hat_test  + alpha
+
+        # Enforce physical bounds
+        P_W_tilde_worse_train = P_W_tilde_worse_train.clip(
+            lower=0,
+            upper=cfg.experiments.optimization_parameters.wind_capacity
+        )
+        P_W_tilde_worse_test = P_W_tilde_worse_test.clip(
+            lower=0,
+            upper=cfg.experiments.optimization_parameters.wind_capacity
+        )
+
+        # --- 3. Compute DA and IM bids ---
+        DA_bids_train = pd.Series(index=data_train.index, dtype=float)
+        IM_bids_train = pd.Series(index=data_train.index, dtype=float)
+
+        for t in data_train.index:
+            if lambda_DA_hat_train.loc[t] < 0:
+                DA_bids_train.loc[t] = 0.0
+                IM_bids_train.loc[t] = P_W_hat_train.loc[t]
+                if lambda_B_hat_train.loc[t] < 0:
+                    IM_bids_train.loc[t] = 0.0
+                continue
+
+            DA_bids_train.loc[t] = P_W_tilde_worse_train.loc[t]
+            IM_bids_train.loc[t] = P_W_hat_train.loc[t] - DA_bids_train.loc[t]
+
+
+        DA_bids_test = pd.Series(index=data_test.index, dtype=float)
+        IM_bids_test = pd.Series(index=data_test.index, dtype=float)
+
+        for t in data_test.index:
+            if lambda_DA_hat_test.loc[t] < 0:
+                DA_bids_test.loc[t] = 0.0
+                IM_bids_test.loc[t] = P_W_hat_test.loc[t]
+                if lambda_B_hat_test.loc[t] < 0:
+                    IM_bids_test.loc[t] = 0.0
+                continue
+
+            DA_bids_test.loc[t] = P_W_tilde_worse_test.loc[t]
+            IM_bids_test.loc[t] = P_W_hat_test.loc[t] - DA_bids_test.loc[t]
+
+        # --- 4. Calculate profits ---
+        profit_train = calculate_profit(
+            DA_bids_train, IM_bids_train,
+            lambda_DA_hat_train, lambda_B_hat_train
+        )
+
+        profit_test = calculate_profit(
+            DA_bids_test, IM_bids_test,
+            lambda_DA_hat_test, lambda_B_hat_test
+        )
+        results_bid_worse_forecast_train_df = pd.DataFrame({
+            "DA_bid": DA_bids_train,
+            "IM_bid": IM_bids_train,
+            "profit": profit_train,
+            "P_W_tilde": P_W_tilde_train,
+            "P_W_hat": P_W_hat_train,
+            "lambda_DA_hat": lambda_DA_hat_train,
+            "lambda_B_hat": lambda_B_hat_train
+        }, index=data_train.index)
+        results_bid_worse_forecast_test_df = pd.DataFrame({
+            "DA_bid": DA_bids_test,
+            "IM_bid": IM_bids_test,
+            "profit": profit_test,
+            "P_W_tilde": P_W_tilde_test,
+            "P_W_hat": P_W_hat_test,
+            "lambda_DA_hat": lambda_DA_hat_test,
+            "lambda_B_hat": lambda_B_hat_test
+        }, index=data_test.index)
+        # ---------------------------------------------
+        # Collect results
+        # ---------------------------------------------
+        results_bid_worse_forecast = {
+            "train_profit_total": profit_train.sum(),
+            "train_profit_mean": profit_train.mean(),
+            "test_profit_total": profit_test.sum(),
+            "test_profit_mean": profit_test.mean(),
+            "train_start": train_start,
+            "train_end": train_end,
+            "valid_start": valid_start,
+            "valid_end": valid_end,
+            "test_start": test_start,
+            "test_end": test_end,
+        }
+        all_results_bid_worse_forecast.append(results_bid_worse_forecast)
+        all_train_results_dfs_bid_worse_forecast = pd.concat([all_train_results_dfs_bid_worse_forecast, results_bid_worse_forecast_train_df])
+        all_test_results_dfs_bid_worse_forecast = pd.concat([all_test_results_dfs_bid_worse_forecast, results_bid_worse_forecast_test_df])
+
 
     # Save results
     total_profit_train_hindsight = all_train_results_dfs_hindsight["profit"].sum()
@@ -230,6 +347,11 @@ def main(cfg):
     mean_profit_train_bid_forecast = all_train_results_dfs_bid_forecast["profit"].mean()
     total_profit_test_bid_forecast = all_test_results_dfs_bid_forecast["profit"].sum()
     mean_profit_test_bid_forecast = all_test_results_dfs_bid_forecast["profit"].mean()
+    total_profit_train_bid_worse_forecast = all_train_results_dfs_bid_worse_forecast["profit"].sum()
+    mean_profit_train_bid_worse_forecast = all_train_results_dfs_bid_worse_forecast["profit"].mean()
+    total_profit_test_bid_worse_forecast = all_test_results_dfs_bid_worse_forecast["profit"].sum()
+    mean_profit_test_bid_worse_forecast = all_test_results_dfs_bid_worse_forecast["profit"].mean()
+
 
     avg_metrics_hindsight = {
         "train_profit_total": total_profit_train_hindsight,
@@ -244,8 +366,17 @@ def main(cfg):
         "test_profit_mean": mean_profit_test_bid_forecast,
     }
 
+    avg_metrics_bid_worse_forecast = {
+        "train_profit_total": total_profit_train_bid_worse_forecast,
+        "train_profit_mean": mean_profit_train_bid_worse_forecast,
+        "test_profit_total": total_profit_test_bid_worse_forecast,
+        "test_profit_mean": mean_profit_test_bid_worse_forecast,
+    }
+
     results_hindsight_df = pd.DataFrame(all_results_hindsight)
     results_bid_forecast_df = pd.DataFrame(all_results_bid_forecast)
+    results_bid_worse_forecast_df = pd.DataFrame(all_results_bid_worse_forecast)
+
     # Save results to CSV
     save_path = Path(__file__).resolve().parent.parent.parent / "reports" / cfg.experiments.experiment_name
     save_path_hindsight = save_path / "hindsight" / cfg.datasets.dataset_name
@@ -262,11 +393,21 @@ def main(cfg):
             for key, value in avg_metrics_bid_forecast.items():
                 f.write(f"{key}: {value}\n")
 
+    save_path_bid_worse_forecast = save_path / "bid_worse_forecast" / cfg.datasets.dataset_name
+    save_path_bid_worse_forecast.mkdir(parents=True, exist_ok=True)
+    results_bid_worse_forecast_df.to_csv(save_path_bid_worse_forecast / "backtest_results.csv", index=False)
+    with open(save_path_bid_worse_forecast / "allwindows_metrics.txt", "w") as f:
+            for key, value in avg_metrics_bid_worse_forecast.items():
+                f.write(f"{key}: {value}\n")
+
     # Save all test results to a CSV file
     all_test_results_dfs_bid_forecast.to_csv(save_path_bid_forecast / "all_test_results_hourly.csv", index=True)
     logger.info(f"All test results saved to {save_path_bid_forecast / 'all_test_results_hourly.csv'}")
     all_test_results_dfs_hindsight.to_csv(save_path_hindsight / "all_test_results_hourly.csv", index=True)
     logger.info(f"All test results saved to {save_path_hindsight / 'all_test_results_hourly.csv'}")
+    all_test_results_dfs_bid_worse_forecast.to_csv(save_path_bid_worse_forecast / "all_test_results_hourly.csv", index=True)
+    logger.info(f"All test results saved to {save_path_bid_worse_forecast / 'all_test_results_hourly.csv'}")
+
 
 
 if __name__ == "__main__":

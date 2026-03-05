@@ -6,7 +6,7 @@ from omegaconf import DictConfig
 from types import SimpleNamespace
 import xarray as xr
 import hydra
-from day_ahead_v2.data import DataHandler
+from day_ahead_v2.data import PandasHandler
 
 logger = logging.getLogger(__name__)
 
@@ -251,38 +251,7 @@ class ModelDeficit(ModelLinearPolicy):
 
 @hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev")
 def main(cfg):
-    data_handler = DataHandler(cfg)
-    data_handler.set_data(data_handler.data.iloc[100:105])
-    logger.info(f"column numbers: {data_handler.data.shape[1]}")
-    feature_columns = cfg.datasets.training.feature_columns[:3]
-    features = data_handler.data[feature_columns].copy()
-    logger.info(f"column numbers: {features.shape[1]}")
-    logger.info(f"other columns: {set(data_handler.data.columns) - set(feature_columns)}")
-    lambda_DA_hat = data_handler.data[cfg.datasets.optimization.lambda_DA_hat]
-    lambda_B_hat = data_handler.data[cfg.datasets.optimization.lambda_B_hat]
-    P_W_hat = data_handler.data[cfg.datasets.optimization.P_W_hat]
-    P_W_tilde = data_handler.data[cfg.datasets.optimization.P_W_tilde]
-    logger.debug(f"lambda_DA_hat: {lambda_DA_hat}")
-    logger.debug(f"lambda_B_hat: {lambda_B_hat}")
-    logger.debug(f"P_W_hat: {P_W_hat}")
-    logger.debug(f"P_W_tilde: {P_W_tilde}")
-    logger.debug(f"features: {features}")
-    optimizer = ModelSurplus(
-        cfg=cfg,
-        lambda_DA_hat=lambda_DA_hat,
-        lambda_B_hat=lambda_B_hat,
-        P_W_hat=P_W_hat,
-        P_W_tilde=P_W_tilde,
-        X_features=features,
-    )
-    optimizer.build_model()
-    root = Path(__file__).resolve().parent.parent.parent
-    save_path = root / "models" / "lp_files" / "model.lp"
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    optimizer.model.to_file(save_path)
-    optimizer.run_optimization()
-    logger.info(f"Optimizer objective value: {optimizer.results.objective_value}")
-
+    pass
 
 if __name__ == "__main__":
     main()

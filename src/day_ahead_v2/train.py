@@ -26,18 +26,21 @@ import random
 import hydra
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
-from datetime import timedelta
+from datetime import datetime, timedelta
 import time
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from pathlib import Path
 from itertools import product
 from joblib import Parallel, delayed
-from day_ahead_v2.data import DataHandler
+from sklearn.feature_selection import VarianceThreshold
+import lightgbm as lgb
+import shap
+from day_ahead_v2.data import PandasHandler, DataHandler
 from day_ahead_v2.optimization import ModelSurplus, ModelBidForecast, ModelDeficit
 from day_ahead_v2.evaluate import evaluate_classifier, compute_accuracy_f1, threshold_predictions, calculate_bids, calculate_profit
 from day_ahead_v2.utils.sanitize_names import sanitize_column_names
-
 
 
 logger = logging.getLogger(__name__)
@@ -104,7 +107,7 @@ def rolling_windows(cfg: DictConfig):
             f"step_days={step_days}"
         )
 
-def split_features_target(cfg: DictConfig, data: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+def split_features_target(cfg: DictConfig, data: pd.DataFrame, sanitize_names: bool = False) -> tuple[pd.DataFrame, pd.Series]:
     """
     Split data into features and target based on config.
 
@@ -118,7 +121,7 @@ def split_features_target(cfg: DictConfig, data: pd.DataFrame) -> tuple[pd.DataF
     """
     datetime_column = cfg.datasets.training.get("datetime_column", None)
     target_column = cfg.datasets.training.target_column
-    feature_columns = list(cfg.datasets.training.feature_columns)
+    feature_columns = list(cfg.datasets.training.feature_columns_fix) + list(cfg.datasets.training.feature_columns_flex)
 
     missing = set(feature_columns + [target_column]) - set(data.columns)
     if missing:
@@ -133,7 +136,8 @@ def split_features_target(cfg: DictConfig, data: pd.DataFrame) -> tuple[pd.DataF
         y.index = data[datetime_column]
 
     # Sanitize column names
-    X = sanitize_column_names(X)
+    if sanitize_names:
+        X = sanitize_column_names(X)
 
     return X, y
 
@@ -163,6 +167,114 @@ def get_hyperparameter_combinations(cfg: DictConfig) -> list[dict]:
 
     combos = list(product(*values))
     return [dict(zip(keys, combo)) for combo in combos]
+
+def feature_selection(cfg: DictConfig, data: pd.DataFrame, start: datetime, end: datetime) -> list[str]:
+    """
+    Perform features selection using:
+    1. Variance threshold
+    2. LightGBM + SHAP values
+    """
+    logger.info("Performing feature selection...")
+
+    # Cut training data for feature selection
+    data_train = data.loc[(data.index >= start) & (data.index < end)].copy()
+    X_train, y_train = split_features_target(cfg, data_train)
+    features = cfg.datasets.training.feature_columns_flex
+    if not set(features).issubset(set(X_train.columns)):
+        missing = set(features) - set(X_train.columns)
+        logger.warning(f"Some feature columns specified in config are missing from training data: {missing}")
+        features = [col for col in features if col in X_train.columns]
+    X_train = X_train[features]
+
+    logger.info(f"Initial number of features: {X_train.shape[1]}")
+
+    # Variance threshold
+    vt = VarianceThreshold(threshold=0.0)
+    _ = vt.fit_transform(X_train)
+    selected_features_var = X_train.columns[vt.get_support()].tolist()
+    logger.info(f"Selected {len(selected_features_var)} features after variance thresholding.")
+    X_train = X_train[selected_features_var]
+
+    # LightGBM + SHAP values
+    lgb_model = lgb.LGBMClassifier(
+        objective="binary",
+        n_estimators=300,
+        learning_rate=0.05,
+        num_leaves=31,
+        random_state=cfg.seed,
+        n_jobs=-1,
+    )
+
+    lgb_model.fit(X_train, y_train)
+
+    # SHAP values
+    logger.debug("Calculating SHAP values for feature importance...")
+    explainer = shap.TreeExplainer(lgb_model)
+    shap_values = explainer.shap_values(X_train)
+    if isinstance(shap_values, list): # For multi-class classification, shap_values is a list of arrays (one per class)
+        shap_array = np.mean(
+            [np.abs(class_shap) for class_shap in shap_values],
+            axis=0
+        )
+    else:
+        shap_array = np.abs(shap_values)
+    mean_abs_shap = shap_array.mean(axis=0)
+
+    shap_importance = pd.Series(mean_abs_shap, index=X_train.columns).sort_values(ascending=False)
+
+    # Cumulative importance selection
+    cumulative_importance = shap_importance.cumsum() / shap_importance.sum()
+
+    shap_threshold = cfg.experiments.feature_selection_parameters.get("shap_cumulative_importance_threshold", 0.9)
+
+    plot_flag = cfg.experiments.feature_selection_parameters.get(
+        "plot_shap_importance", False
+    )
+
+    if plot_flag:
+        logger.debug("Plotting SHAP feature importance...")
+        save_path = Path(cfg.results.save_path)
+        if not save_path.is_absolute():
+            save_path = Path(__file__).resolve().parent.parent.parent / save_path
+        save_path.mkdir(parents=True, exist_ok=True)
+        # Plot top N features (avoid overcrowded plot)
+        top_n = min(30, len(shap_importance))
+        shap_top = shap_importance.head(top_n)
+
+        plt.figure(figsize=(10, 8))
+        shap_top.sort_values().plot(kind="barh")
+        plt.xlabel("Mean |SHAP value|")
+        plt.title("SHAP Feature Importance (Top {})".format(top_n))
+        plt.tight_layout()
+
+        plot_file = save_path / "shap_feature_importance.pdf"
+        plt.savefig(plot_file)
+        plt.close()
+        logger.info(f"SHAP importance plot saved to {plot_file}")
+
+        plt.figure(figsize=(10, 8))
+        cumulative_importance.plot()
+        plt.axhline(y=shap_threshold, color="r", linestyle="--")
+        plt.xlabel("Features (ordered by importance)")
+        plt.ylabel("Cumulative Importance")
+        plt.title("Cumulative SHAP Feature Importance")
+        plt.tight_layout()
+        cumulative_plot_file = save_path / "shap_cumulative_importance.pdf"
+        plt.savefig(cumulative_plot_file)
+        plt.close()
+        logger.info(f"Cumulative SHAP importance plot saved to {cumulative_plot_file}")
+
+    selected_features_shap = cumulative_importance[cumulative_importance <= shap_threshold].index.tolist()
+
+    # Ensure at least 5 features are selected
+    if len(selected_features_shap) < 5:
+        selected_features_shap = shap_importance.head(5).index.tolist()
+        logger.warning(f"Less than 5 features selected by SHAP. Automatically selecting top 5 features: {selected_features_shap}")
+
+    logger.info(f"Selected {len(selected_features_shap)} features based on SHAP cumulative importance threshold of {shap_threshold}.")
+
+    logger.info(f"Final number of selected features_flex: {len(selected_features_shap)}")
+    cfg.datasets.training.feature_columns_flex = selected_features_shap
 
 def train_batch(cfg: DictConfig, X_train: pd.DataFrame, y_train: pd.Series, hyperparameters: dict) -> object:
     """Train model for a single rolling window and hyperparameter set."""
@@ -234,19 +346,19 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
     logger.debug("Cutting train data...")
     data_train = data_handler.cut_data(train_start, train_end, cfg.datasets.training.datetime_column)
     logger.debug("Splitting features and target for training data...")
-    X_train, y_train = split_features_target(cfg, data_train.data)
+    X_train, y_train = split_features_target(cfg, data_train.data, sanitize_names=True)
     logger.info(f"Target counts in training data:\n{y_train.value_counts()}")
 
     logger.debug("Cutting validation data...")
     data_valid = data_handler.cut_data(valid_start, valid_end, cfg.datasets.training.datetime_column)
     logger.debug("Splitting features and target for validation data...")
-    X_val, y_val = split_features_target(cfg, data_valid.data)
+    X_val, y_val = split_features_target(cfg, data_valid.data, sanitize_names=True)
     logger.info(f"Target counts in validation data:\n{y_val.value_counts()}")
 
     logger.debug("Cutting test data...")
     data_test = data_handler.cut_data(test_start, test_end, cfg.datasets.training.datetime_column)
     logger.debug("Splitting features and target for test data...")
-    X_test, y_test = split_features_target(cfg, data_test.data)
+    X_test, y_test = split_features_target(cfg, data_test.data, sanitize_names=True)
     logger.info(f"Target counts in test data:\n{y_test.value_counts()}")
 
     # ---------------------------------------------
@@ -285,7 +397,6 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
     best_score = -np.inf
     best_params = None
     best_model = None
-    best_train_results_df = None
     best_val_results_df = None
 
     for model, params, score, train_results_df, val_results_df in results:
@@ -299,7 +410,6 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
             best_score = score
             best_params = params
             best_model = model
-            best_train_results_df = train_results_df
             best_val_results_df = val_results_df
 
     if best_params is None:
@@ -314,6 +424,7 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
 
     best_alpha = None
     best_profit = -np.inf
+    best_mean_profit = -np.inf
     best_optimizers = None
     logger.info(f"Best model classes: {best_model.classes_}")
     model_mapping = cfg.datasets.optimization.model_mapping
@@ -332,6 +443,7 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
         X_["thresholded_label"] = threshold_preds_df["thresholded_label"]
         X_["uncertain"] = threshold_preds_df["uncertain"]
         tot_profit_alpha = 0
+        mean_profits_alpha = []
         optimizers_alpha = {}
         failed_alpha = False
         logger.debug(f"Optimizing for alpha={alpha} with predicted labels: {threshold_preds_df['thresholded_label'].unique()}")
@@ -390,18 +502,22 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
                 break
             logger.info(f"Profit per sample for label {label_} with alpha={alpha}: {optimizer.results.objective_value / len(datetime_index):.2f}")
             tot_profit_alpha += optimizer.results.objective_value
+            if label_ != cfg.datasets.training.fallback_class:
+                mean_profits_alpha.append(optimizer.results.objective_value / len(datetime_index))
             optimizers_alpha[model_name] = optimizer
 
         if failed_alpha:
             logger.warning(f"Skipping alpha={alpha} due to optimization failure.")
             continue
         logger.info(f"Total profit for alpha={alpha}: {tot_profit_alpha:.2f}")
-        if tot_profit_alpha > best_profit:
+        mean_profit = np.mean(mean_profits_alpha)
+        if mean_profit > best_mean_profit:
+            best_mean_profit = mean_profit
             best_profit = tot_profit_alpha
             best_alpha = alpha
             best_optimizers = optimizers_alpha
 
-    logger.info(f"Best decision threshold alpha: {best_alpha} with profit: {best_profit}")
+    logger.info(f"Best decision threshold alpha: {best_alpha} with mean profit: {best_mean_profit} and total profit: {best_profit}")
 
     # ---------------------------------------------
     # Retrain on train + validation
@@ -508,7 +624,7 @@ def run_backtest(cfg: DictConfig) -> list:
     # ---------------------------------------------
     # Data import and preprocessing
     # ---------------------------------------------
-    data_handler = DataHandler(cfg)
+    data_handler = PandasHandler(cfg)
     data_handler = data_handler.cut_data(cfg.experiments.experiment_parameters.start_date,
                                         cfg.experiments.experiment_parameters.end_date,
                                         cfg.datasets.training.datetime_column,
@@ -523,12 +639,20 @@ def run_backtest(cfg: DictConfig) -> list:
         logger.info("No NaN values found in data")
 
     # ---------------------------------------------
+    # Feature selection
+    # ---------------------------------------------
+    windows = list(rolling_windows(cfg))
+
+    feature_selection(cfg, data_handler.data, start=windows[0]["train"][0], end=windows[0]["train"][1])
+
+    # ---------------------------------------------
     # Rolling window backtest
     # ---------------------------------------------
     all_results = []
     all_train_results_dfs = pd.DataFrame()
     all_test_results_dfs = pd.DataFrame()
-    for window in rolling_windows(cfg):
+
+    for window in windows:
         try:
             _, results, train_results_df, test_results_df = train_model(cfg, window, data_handler)
             all_results.append(results)
@@ -609,7 +733,7 @@ def run_backtest(cfg: DictConfig) -> list:
 
 @hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev")
 def main(cfg: DictConfig) -> None:
-    logger.info("Starting experiment")
+    logger.info(f"Starting experiment {cfg.experiments.experiment_name} with dataset {cfg.datasets.dataset_name} and model {cfg.models.model_name}")
     seed = cfg.seed
     random.seed(seed)
     np.random.seed(seed)

@@ -1,5 +1,5 @@
 # Experiment configuration for Exp1
-experiment_name: "large" # Name of the experiment
+experiment_name: "nov23_april24" # Name of the experiment
 
 # Train parameters
 train_parameters:
@@ -10,8 +10,8 @@ train_parameters:
 
 # Model parameters
 experiment_parameters:
-  start_date: "2023-02-01" # Start date for training
-  end_date: "2025-01-01" # End date for testing
+  start_date: "2023-04-05" # Start date for training
+  end_date: "2024-05-01" # End date for testing
   decision_threshold_alphas: [0.55, 0.6, 0.65, 0.7, 0.75] # Thresholds to be tuned for converting probabilities to class labels
 
 # Optimization parameters

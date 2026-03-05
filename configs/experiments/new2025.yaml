@@ -1,20 +1,24 @@
 # Experiment configuration for Exp1
-experiment_name: "large" # Name of the experiment
+experiment_name: "new2025" # Name of the experiment
 
 # Train parameters
 train_parameters:
-  train_length: 180 # Days of training
+  train_length: 120 # Days of training
   valid_length: 30 # Days of validation
   test_length: 7 # Days of testing
   n_jobs: 5 # or -1 for all cores
 
 # Model parameters
 experiment_parameters:
-  start_date: "2023-02-01" # Start date for training
-  end_date: "2025-01-01" # End date for testing
+  start_date: "2025-04-01" # Start date for training
+  end_date: "2026-01-31" # End date for testing
   decision_threshold_alphas: [0.55, 0.6, 0.65, 0.7, 0.75] # Thresholds to be tuned for converting probabilities to class labels
 
 # Optimization parameters
 optimization_parameters:
   electrolyzer_capacity: 0.0
   wind_capacity: 7.2 # MW
+
+feature_selection_parameters:
+  shap_cumulative_importance_threshold: 0.9 # Threshold for cumulative importance in SHAP feature selection
+  plot_shap_importance: true # Whether to plot SHAP feature importance
