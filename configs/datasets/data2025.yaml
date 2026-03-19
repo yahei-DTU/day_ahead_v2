@@ -22,13 +22,13 @@ optimization:
   P_W_hat: "WindPowerRealized"
   P_W_tilde: "WindPowerForecast"
   model_mapping:
-    0: ModelDeficit
-    1: ModelSurplus
-    2: ModelBidForecast
+    0: Deficit
+    1: Surplus
+    2: Balance
 
 transform:
   remove_classes:
-    target_classes: [Balance]
+    # target_classes: [Balance]
   label_mapping:
     target_classes:
       Deficit: 0

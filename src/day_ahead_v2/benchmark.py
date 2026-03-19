@@ -14,11 +14,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import hydra
+from omegaconf import OmegaConf
 import logging
-from day_ahead_v2.optimization import ModelHindsight
+from day_ahead_v2.optimization import ModelHindsight, ModelSinglePolicy
 from day_ahead_v2.data import PandasHandler
-from day_ahead_v2.train import rolling_windows
-from day_ahead_v2.evaluate import calculate_profit
+from day_ahead_v2.train import rolling_windows, feature_selection, split_features_target
+from day_ahead_v2.evaluate import calculate_profit, calculate_hydrogen_balancing_bids
+from day_ahead_v2.utils import electrolyzer_efficiency
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +32,52 @@ def simulate_ar1_errors(index, phi, sigma, initial_error):
         errors[i] = phi * errors[i-1] + eps
     return pd.Series(errors, index=index)
 
+def calculate_bids(cfg, data_df: pd.DataFrame, features: pd.DataFrame, trained_optimizer: ModelSinglePolicy) -> pd.Series:
+    """Calculate the bids for best optimization parameters"""
+    lambda_max = 1000 # max lambda for bidding curve
+    lambda_step = 2  # step size of bids
+    P_W_tilde = data_df[cfg.datasets.optimization.P_W_tilde]
+    if P_W_tilde.isna().any():
+        logger.error(f"{P_W_tilde.isna().sum()} values in P_W_tilde are NaN. Check data preprocessing.")
+        # P_W_tilde.fillna(0, inplace=True)
+    P_W_hat = data_df[cfg.datasets.optimization.P_W_hat]
+    lambda_DA_hat = data_df[cfg.datasets.optimization.lambda_DA_hat]
+    lambda_B_hat = data_df[cfg.datasets.optimization.lambda_B_hat]
+    features = features.copy()
+    features["intercept"] = 1.0
+    p_DA = pd.Series(index=data_df.index, dtype=float)
+    bid_lambda_DA = np.arange(0,lambda_max,lambda_step) # Discretization for bidding curve, actual bids follow from curve
+    bid_p_DA = np.zeros((len(data_df),len(bid_lambda_DA)))
+    bid_p_DA = pd.DataFrame(bid_p_DA, index=data_df.index, columns=bid_lambda_DA)
+    q = trained_optimizer.results.q.copy()
+    q = q.drop('lambda_DA_hat')
+    for t in data_df.index:
+        # Check for negative prices and handle accordingly
+        if lambda_DA_hat.loc[t] < 0:
+            logger.warning(f"Negative price detected at time {t}: lambda_DA_hat={lambda_DA_hat.loc[t]}. Setting DA bid to 0.")
+            p_DA.loc[t] = -cfg.experiments.optimization_parameters.electrolyzer_capacity
+            continue
+        # Loop through discretized steps of bidding curve to find optimal bid
+        for k in bid_p_DA.columns:
+            a_DA = trained_optimizer.results.q["lambda_DA_hat"]
+            b_DA = features.loc[t,:] @ q
+            if bid_lambda_DA[k] > lambda_DA_hat.loc[t]:
+                p_DA.loc[t] = bid_p_DA.loc[t,k-lambda_step]
+                break
+            bid_p_DA.loc[t,k] = np.maximum(np.minimum(P_W_tilde.loc[t] + a_DA * bid_lambda_DA[k] + b_DA,cfg.experiments.optimization_parameters.wind_capacity),-cfg.experiments.optimization_parameters.electrolyzer_capacity)
+
+    # Check if any p_DA are still NaN (e.g., due to all predictions being uncertain or fallback class)
+    if p_DA.isna().any():
+        logger.error(f"{p_DA.isna().sum()} DA bids are NaN. Check calculate_bids method.")
+        p_DA.fillna(P_W_tilde, inplace=True)
+
+    p_B, p_H, h = calculate_hydrogen_balancing_bids(cfg, p_DA, lambda_B_hat, P_W_hat)
+
+    return p_DA, p_B, p_H, h
+
 @hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev")
 def main(cfg):
+    H2_PRICE = cfg.experiments.optimization_parameters.hydrogen_price
     # ---------------------------------------------
     # Import dataset
     # ---------------------------------------------
@@ -49,20 +95,29 @@ def main(cfg):
     else:
         logger.info("No NaN values found in data")
 
+    # ----------------------------------------------
+    # Initialize the electrolyzer
+    # ----------------------------------------------
+    electrolyzer_efficiency.initiate_HYP_L(cfg)
+
     # ---------------------------------------------
     # Rolling window backtest
     # ---------------------------------------------
+    windows = list(rolling_windows(cfg))
+
+    feature_selection(cfg, data_handler.data, start=windows[0]["train"][0], end=windows[0]["train"][1])
+
     all_results_hindsight = []
+    all_results_policy = []
     all_results_bid_forecast = []
-    all_results_bid_worse_forecast = []
     all_train_results_dfs_hindsight = pd.DataFrame()
     all_test_results_dfs_hindsight = pd.DataFrame()
+    all_train_results_dfs_policy = pd.DataFrame()
+    all_test_results_dfs_policy = pd.DataFrame()
     all_train_results_dfs_bid_forecast = pd.DataFrame()
     all_test_results_dfs_bid_forecast = pd.DataFrame()
-    all_train_results_dfs_bid_worse_forecast = pd.DataFrame()
-    all_test_results_dfs_bid_worse_forecast = pd.DataFrame()
 
-    for window in rolling_windows(cfg):
+    for window in windows:
 
         train_start, train_end = window["train"]
         valid_start, valid_end = window["valid"]
@@ -78,17 +133,27 @@ def main(cfg):
         # ---------------------------------------------
         logger.debug("Cutting train data...")
         data_train = data_handler.cut_data(train_start, train_end, cfg.datasets.training.datetime_column)
+        logger.debug("Splitting features and target for training data...")
+        X_train, y_train = split_features_target(cfg, data_train.data, sanitize_names=True)
+        logger.info(f"Target counts in training data:\n{y_train.value_counts()}")
 
         logger.debug("Cutting validation data...")
         data_valid = data_handler.cut_data(valid_start, valid_end, cfg.datasets.training.datetime_column)
+        logger.debug("Splitting features and target for validation data...")
+        X_val, y_val = split_features_target(cfg, data_valid.data, sanitize_names=True)
+        logger.info(f"Target counts in validation data:\n{y_val.value_counts()}")
 
         logger.debug("Cutting test data...")
         data_test = data_handler.cut_data(test_start, test_end, cfg.datasets.training.datetime_column)
+        logger.debug("Splitting features and target for test data...")
+        X_test, y_test = split_features_target(cfg, data_test.data, sanitize_names=True)
+        logger.info(f"Target counts in test data:\n{y_test.value_counts()}")
 
-        X_train_full = pd.concat([data_train.data, data_valid.data])
-        datetime_index_train = X_train_full.index
+        data_train_full = pd.concat([data_train.data, data_valid.data])
+        X_train_full = pd.concat([X_train, X_val])
+        datetime_index_train = data_train_full.index
         datetime_index_test = data_test.data.index
-        del X_train_full, data_valid
+        del data_train_full, data_valid
         data_train = data_handler.data.loc[datetime_index_train]
         data_test = data_handler.data.loc[datetime_index_test]
         lambda_DA_hat_train = data_train[cfg.datasets.optimization.lambda_DA_hat]
@@ -129,22 +194,38 @@ def main(cfg):
             )
         else:
             logger.debug(f"Optimization converged for test data in window {window}. Status: {hindsight_model_test.results.status}")
-        DA_bids_train = pd.Series(hindsight_model_train.results.p_DA, index=data_train.index)
-        IM_bids_train = pd.Series(hindsight_model_train.results.delta_p, index=data_train.index)
-        DA_bids_test = pd.Series(hindsight_model_test.results.p_DA, index=data_test.index)
-        IM_bids_test = pd.Series(hindsight_model_test.results.delta_p, index=data_test.index)
-        profit_train = calculate_profit(DA_bids_train, IM_bids_train, lambda_DA_hat_train, lambda_B_hat_train)
-        profit_test = calculate_profit(DA_bids_test, IM_bids_test, lambda_DA_hat_test, lambda_B_hat_test)
+        p_DA_train = pd.Series(hindsight_model_train.results.p_DA, index=data_train.index)
+        p_B_train = pd.Series(hindsight_model_train.results.p_B, index=data_train.index)
+        p_H_train = pd.Series(hindsight_model_train.results.p_H, index=data_train.index)
+        h_train = pd.Series(hindsight_model_train.results.h, index=data_train.index)
+        p_DA_test = pd.Series(hindsight_model_test.results.p_DA, index=data_test.index)
+        p_B_test = pd.Series(hindsight_model_test.results.p_B, index=data_test.index)
+        p_H_test = pd.Series(hindsight_model_test.results.p_H, index=data_test.index)
+        h_test = pd.Series(hindsight_model_test.results.h, index=data_test.index)
+        profit_train = calculate_profit(p_DA_train, h_train, p_B_train, lambda_DA_hat_train, H2_PRICE, lambda_B_hat_train)
+        profit_test = calculate_profit(p_DA_test, h_test, p_B_test, lambda_DA_hat_test, H2_PRICE, lambda_B_hat_test)
         # Add bids and profit to results dfs
         results_hindsight_train_df = pd.DataFrame({
-            "DA_bid": DA_bids_train,
-            "IM_bid": IM_bids_train,
-            "profit": profit_train
+            "p_DA": p_DA_train,
+            "p_B": p_B_train,
+            "p_H": p_H_train,
+            "h": h_train,
+            "profit": profit_train,
+            "P_W_hat": P_W_hat_train,
+            "P_W_tilde": P_W_tilde_train,
+            "lambda_DA_hat": lambda_DA_hat_train,
+            "lambda_B_hat": lambda_B_hat_train
         }, index=data_train.index)
         results_hindsight_test_df = pd.DataFrame({
-            "DA_bid": DA_bids_test,
-            "IM_bid": IM_bids_test,
-            "profit": profit_test
+            "p_DA": p_DA_test,
+            "p_B": p_B_test,
+            "p_H": p_H_test,
+            "h": h_test,
+            "profit": profit_test,
+            "P_W_hat": P_W_hat_test,
+            "P_W_tilde": P_W_tilde_test,
+            "lambda_DA_hat": lambda_DA_hat_test,
+            "lambda_B_hat": lambda_B_hat_test
         }, index=data_test.index)
         # ---------------------------------------------
         # Collect results
@@ -160,61 +241,111 @@ def main(cfg):
             "valid_end": valid_end,
             "test_start": test_start,
             "test_end": test_end,
+            "lambda_H": H2_PRICE
         }
         all_results_hindsight.append(results_hindsight)
         all_train_results_dfs_hindsight = pd.concat([all_train_results_dfs_hindsight, results_hindsight_train_df])
         all_test_results_dfs_hindsight = pd.concat([all_test_results_dfs_hindsight, results_hindsight_test_df])
-        del DA_bids_train, IM_bids_train, DA_bids_test, IM_bids_test, profit_train, profit_test
-        # ------------------------------------- Model 2 - Bid Forecast -------------------------------------
-        logger.debug("Running Bid Forecast Model...")
-        DA_bids_train = pd.Series(index=data_train.index, dtype=float)
-        IM_bids_train = pd.Series(index=data_train.index, dtype=float)
-        for t in data_train.index:
-            # Check for negative prices and handle accordingly
-            if lambda_DA_hat_train.loc[t] < 0:
-                logger.warning(f"Negative price detected at time {t}: lambda_DA_hat={lambda_DA_hat_train.loc[t]}. Setting DA bid to 0.")
-                DA_bids_train.loc[t] = 0.0
-                IM_bids_train.loc[t] = P_W_hat_train.loc[t] - DA_bids_train.loc[t]
-                if lambda_B_hat_train.loc[t] < 0:
-                    logger.warning(f"Negative imbalance price detected at time {t}: lambda_B_hat={lambda_B_hat_train.loc[t]}. Setting IM bid to 0.")
-                    IM_bids_train.loc[t] = 0.0
-                continue
-            DA_bids_train.loc[t] = P_W_tilde_train.loc[t]
-            IM_bids_train.loc[t] = P_W_hat_train.loc[t] - DA_bids_train.loc[t]
-        profit_train = calculate_profit(DA_bids_train, IM_bids_train, lambda_DA_hat_train, lambda_B_hat_train)
-
-        DA_bids_test = pd.Series(index=data_test.index, dtype=float)
-        IM_bids_test = pd.Series(index=data_test.index, dtype=float)
-        for t in data_test.index:
-            # Check for negative prices and handle accordingly
-            if lambda_DA_hat_test.loc[t] < 0:
-                logger.warning(f"Negative price detected at time {t}: lambda_DA_hat={lambda_DA_hat_test.loc[t]}. Setting DA bid to 0.")
-                DA_bids_test.loc[t] = 0.0
-                IM_bids_test.loc[t] = P_W_hat_test.loc[t] - DA_bids_test.loc[t]
-                if lambda_B_hat_test.loc[t] < 0:
-                    logger.warning(f"Negative imbalance price detected at time {t}: lambda_B_hat={lambda_B_hat_test.loc[t]}. Setting IM bid to 0.")
-                    IM_bids_test.loc[t] = 0.0
-                continue
-            DA_bids_test.loc[t] = P_W_tilde_test.loc[t]
-            IM_bids_test.loc[t] = P_W_hat_test.loc[t] - DA_bids_test.loc[t]
-        profit_test = calculate_profit(DA_bids_test, IM_bids_test, lambda_DA_hat_test, lambda_B_hat_test)
-
+        del p_DA_train, p_B_train, p_H_train, h_train, profit_train, p_DA_test, p_B_test, p_H_test, h_test, profit_test
+        # ------------------------------------- Model 2 - Linear Policy -------------------------------------
+        logger.debug("Running Single Linear Policy Model...")
+        single_policy_model_train = ModelSinglePolicy(
+            cfg = cfg,
+            lambda_DA_hat=lambda_DA_hat_train,
+            lambda_B_hat=lambda_B_hat_train,
+            P_W_hat=P_W_hat_train,
+            P_W_tilde=P_W_tilde_train,
+            X_features=X_train_full
+        )
+        single_policy_model_train.build_model()
+        single_policy_model_train.run_optimization()
+        if single_policy_model_train.results.status != "ok":
+            logger.error(
+                f"Optimization did not converge for training data in window {window}. Status: {single_policy_model_train.results.status}"
+            )
+        else:
+            logger.debug(f"Optimization converged for training data in window {window}. Status: {single_policy_model_train.results.status}")
+        p_DA_train = pd.Series(single_policy_model_train.results.p_DA, index=data_train.index)
+        p_B_train = pd.Series(single_policy_model_train.results.p_B, index=data_train.index)
+        p_H_train = pd.Series(single_policy_model_train.results.p_H, index=data_train.index)
+        h_train = pd.Series(single_policy_model_train.results.h, index=data_train.index)
+        p_DA_test, p_B_test, p_H_test, h_test = calculate_bids(cfg, data_test, X_test, single_policy_model_train)
+        profit_train = calculate_profit(p_DA_train, h_train, p_B_train, lambda_DA_hat_train, H2_PRICE, lambda_B_hat_train)
+        profit_test = calculate_profit(p_DA_test, h_test, p_B_test, lambda_DA_hat_test, H2_PRICE, lambda_B_hat_test)
         # Add bids and profit to results dfs
-        results_bid_forecast_train_df = pd.DataFrame({
-            "DA_bid": DA_bids_train,
-            "IM_bid": IM_bids_train,
+        results_policy_train_df = pd.DataFrame({
+            "p_DA": p_DA_train,
+            "p_B": p_B_train,
+            "p_H": p_H_train,
+            "h": h_train,
             "profit": profit_train,
-            "P_W_tilde": P_W_tilde_train,
             "P_W_hat": P_W_hat_train,
+            "P_W_tilde": P_W_tilde_train,
             "lambda_DA_hat": lambda_DA_hat_train,
             "lambda_B_hat": lambda_B_hat_train
         }, index=data_train.index)
-        results_bid_forecast_test_df = pd.DataFrame({
-            "DA_bid": DA_bids_test,
-            "IM_bid": IM_bids_test,
+        results_policy_test_df = pd.DataFrame({
+            "p_DA": p_DA_test,
+            "p_B": p_B_test,
+            "p_H": p_H_test,
+            "h": h_test,
             "profit": profit_test,
-            "P_W_tilde": P_W_tilde_test,
             "P_W_hat": P_W_hat_test,
+            "P_W_tilde": P_W_tilde_test,
+            "lambda_DA_hat": lambda_DA_hat_test,
+            "lambda_B_hat": lambda_B_hat_test
+        }, index=data_test.index)
+        # ---------------------------------------------
+        # Collect results
+        # ---------------------------------------------
+        results_policy = {
+            "train_profit_total": profit_train.sum(),
+            "train_profit_mean": profit_train.mean(),
+            "test_profit_total": profit_test.sum(),
+            "test_profit_mean": profit_test.mean(),
+            "train_start": train_start,
+            "train_end": train_end,
+            "valid_start": valid_start,
+            "valid_end": valid_end,
+            "test_start": test_start,
+            "test_end": test_end,
+            "lambda_H": H2_PRICE
+        }
+        all_results_policy.append(results_policy)
+        all_train_results_dfs_policy = pd.concat([all_train_results_dfs_policy, results_policy_train_df])
+        all_test_results_dfs_policy = pd.concat([all_test_results_dfs_policy, results_policy_test_df])
+        del p_DA_train, p_B_train, p_H_train, h_train, profit_train, p_DA_test, p_B_test, p_H_test, h_test, profit_test
+
+        # ------------------------------------- Model 3 - Bid Forecast Model -------------------------------------
+        logger.debug("Running Bid Forecast Model...")
+        p_DA_train = P_W_tilde_train.copy()
+        p_DA_train[lambda_DA_hat_train < 0] = -cfg.experiments.optimization_parameters.electrolyzer_capacity
+        p_B_train, p_H_train, h_train = calculate_hydrogen_balancing_bids(cfg, p_DA_train, lambda_B_hat_train, P_W_hat_train)
+        p_DA_test = P_W_tilde_test.copy()
+        p_DA_test[lambda_DA_hat_test < 0] = -cfg.experiments.optimization_parameters.electrolyzer_capacity
+        p_B_test, p_H_test, h_test = calculate_hydrogen_balancing_bids(cfg, p_DA_test, lambda_B_hat_test, P_W_hat_test)
+        profit_train = calculate_profit(p_DA_train, h_train, p_B_train, lambda_DA_hat_train, H2_PRICE, lambda_B_hat_train)
+        profit_test = calculate_profit(p_DA_test, h_test, p_B_test, lambda_DA_hat_test, H2_PRICE, lambda_B_hat_test)
+        # Add bids and profit to results dfs
+        results_bid_forecast_train_df = pd.DataFrame({
+            "p_DA": p_DA_train,
+            "p_B": p_B_train,
+            "p_H": p_H_train,
+            "h": h_train,
+            "profit": profit_train,
+            "P_W_hat": P_W_hat_train,
+            "P_W_tilde": P_W_tilde_train,
+            "lambda_DA_hat": lambda_DA_hat_train,
+            "lambda_B_hat": lambda_B_hat_train,
+        }, index=data_train.index)
+        results_bid_forecast_test_df = pd.DataFrame({
+            "p_DA": p_DA_test,
+            "p_B": p_B_test,
+            "p_H": p_H_test,
+            "h": h_test,
+            "profit": profit_test,
+            "P_W_hat": P_W_hat_test,
+            "P_W_tilde": P_W_tilde_test,
             "lambda_DA_hat": lambda_DA_hat_test,
             "lambda_B_hat": lambda_B_hat_test
         }, index=data_test.index)
@@ -232,132 +363,38 @@ def main(cfg):
             "valid_end": valid_end,
             "test_start": test_start,
             "test_end": test_end,
+            "lambda_H": H2_PRICE
         }
         all_results_bid_forecast.append(results_bid_forecast)
         all_train_results_dfs_bid_forecast = pd.concat([all_train_results_dfs_bid_forecast, results_bid_forecast_train_df])
         all_test_results_dfs_bid_forecast = pd.concat([all_test_results_dfs_bid_forecast, results_bid_forecast_test_df])
-        del DA_bids_train, IM_bids_train, DA_bids_test, IM_bids_test, profit_train, profit_test
-        # ------------------------------------- Model 3 - Bid Worse Forecast -------------------------------------
-        logger.debug("Running Bid Worse Forecast Model...")
-
-        # --- 1. Compute original forecast error ---
-        error_train = P_W_tilde_train - P_W_hat_train
-        error_test = P_W_tilde_test - P_W_hat_test
-
-        # --- 2. Rescale error ---
-        alpha = 5   # >1 makes forecast worse
-
-        P_W_tilde_worse_train = P_W_hat_train + alpha
-        P_W_tilde_worse_test  = P_W_hat_test  + alpha
-
-        # Enforce physical bounds
-        P_W_tilde_worse_train = P_W_tilde_worse_train.clip(
-            lower=0,
-            upper=cfg.experiments.optimization_parameters.wind_capacity
-        )
-        P_W_tilde_worse_test = P_W_tilde_worse_test.clip(
-            lower=0,
-            upper=cfg.experiments.optimization_parameters.wind_capacity
-        )
-
-        # --- 3. Compute DA and IM bids ---
-        DA_bids_train = pd.Series(index=data_train.index, dtype=float)
-        IM_bids_train = pd.Series(index=data_train.index, dtype=float)
-
-        for t in data_train.index:
-            if lambda_DA_hat_train.loc[t] < 0:
-                DA_bids_train.loc[t] = 0.0
-                IM_bids_train.loc[t] = P_W_hat_train.loc[t]
-                if lambda_B_hat_train.loc[t] < 0:
-                    IM_bids_train.loc[t] = 0.0
-                continue
-
-            DA_bids_train.loc[t] = P_W_tilde_worse_train.loc[t]
-            IM_bids_train.loc[t] = P_W_hat_train.loc[t] - DA_bids_train.loc[t]
-
-
-        DA_bids_test = pd.Series(index=data_test.index, dtype=float)
-        IM_bids_test = pd.Series(index=data_test.index, dtype=float)
-
-        for t in data_test.index:
-            if lambda_DA_hat_test.loc[t] < 0:
-                DA_bids_test.loc[t] = 0.0
-                IM_bids_test.loc[t] = P_W_hat_test.loc[t]
-                if lambda_B_hat_test.loc[t] < 0:
-                    IM_bids_test.loc[t] = 0.0
-                continue
-
-            DA_bids_test.loc[t] = P_W_tilde_worse_test.loc[t]
-            IM_bids_test.loc[t] = P_W_hat_test.loc[t] - DA_bids_test.loc[t]
-
-        # --- 4. Calculate profits ---
-        profit_train = calculate_profit(
-            DA_bids_train, IM_bids_train,
-            lambda_DA_hat_train, lambda_B_hat_train
-        )
-
-        profit_test = calculate_profit(
-            DA_bids_test, IM_bids_test,
-            lambda_DA_hat_test, lambda_B_hat_test
-        )
-        results_bid_worse_forecast_train_df = pd.DataFrame({
-            "DA_bid": DA_bids_train,
-            "IM_bid": IM_bids_train,
-            "profit": profit_train,
-            "P_W_tilde": P_W_tilde_train,
-            "P_W_hat": P_W_hat_train,
-            "lambda_DA_hat": lambda_DA_hat_train,
-            "lambda_B_hat": lambda_B_hat_train
-        }, index=data_train.index)
-        results_bid_worse_forecast_test_df = pd.DataFrame({
-            "DA_bid": DA_bids_test,
-            "IM_bid": IM_bids_test,
-            "profit": profit_test,
-            "P_W_tilde": P_W_tilde_test,
-            "P_W_hat": P_W_hat_test,
-            "lambda_DA_hat": lambda_DA_hat_test,
-            "lambda_B_hat": lambda_B_hat_test
-        }, index=data_test.index)
-        # ---------------------------------------------
-        # Collect results
-        # ---------------------------------------------
-        results_bid_worse_forecast = {
-            "train_profit_total": profit_train.sum(),
-            "train_profit_mean": profit_train.mean(),
-            "test_profit_total": profit_test.sum(),
-            "test_profit_mean": profit_test.mean(),
-            "train_start": train_start,
-            "train_end": train_end,
-            "valid_start": valid_start,
-            "valid_end": valid_end,
-            "test_start": test_start,
-            "test_end": test_end,
-        }
-        all_results_bid_worse_forecast.append(results_bid_worse_forecast)
-        all_train_results_dfs_bid_worse_forecast = pd.concat([all_train_results_dfs_bid_worse_forecast, results_bid_worse_forecast_train_df])
-        all_test_results_dfs_bid_worse_forecast = pd.concat([all_test_results_dfs_bid_worse_forecast, results_bid_worse_forecast_test_df])
-
+        del p_DA_train, p_B_train, p_H_train, h_train, profit_train, p_DA_test, p_B_test, p_H_test, h_test, profit_test
 
     # Save results
     total_profit_train_hindsight = all_train_results_dfs_hindsight["profit"].sum()
     mean_profit_train_hindsight = all_train_results_dfs_hindsight["profit"].mean()
     total_profit_test_hindsight = all_test_results_dfs_hindsight["profit"].sum()
     mean_profit_test_hindsight = all_test_results_dfs_hindsight["profit"].mean()
+    total_profit_train_policy = all_train_results_dfs_policy["profit"].sum()
+    mean_profit_train_policy = all_train_results_dfs_policy["profit"].mean()
+    total_profit_test_policy = all_test_results_dfs_policy["profit"].sum()
+    mean_profit_test_policy = all_test_results_dfs_policy["profit"].mean()
     total_profit_train_bid_forecast = all_train_results_dfs_bid_forecast["profit"].sum()
     mean_profit_train_bid_forecast = all_train_results_dfs_bid_forecast["profit"].mean()
     total_profit_test_bid_forecast = all_test_results_dfs_bid_forecast["profit"].sum()
     mean_profit_test_bid_forecast = all_test_results_dfs_bid_forecast["profit"].mean()
-    total_profit_train_bid_worse_forecast = all_train_results_dfs_bid_worse_forecast["profit"].sum()
-    mean_profit_train_bid_worse_forecast = all_train_results_dfs_bid_worse_forecast["profit"].mean()
-    total_profit_test_bid_worse_forecast = all_test_results_dfs_bid_worse_forecast["profit"].sum()
-    mean_profit_test_bid_worse_forecast = all_test_results_dfs_bid_worse_forecast["profit"].mean()
-
 
     avg_metrics_hindsight = {
         "train_profit_total": total_profit_train_hindsight,
         "train_profit_mean": mean_profit_train_hindsight,
         "test_profit_total": total_profit_test_hindsight,
         "test_profit_mean": mean_profit_test_hindsight,
+    }
+    avg_metrics_policy = {
+        "train_profit_total": total_profit_train_policy,
+        "train_profit_mean": mean_profit_train_policy,
+        "test_profit_total": total_profit_test_policy,
+        "test_profit_mean": mean_profit_test_policy,
     }
     avg_metrics_bid_forecast = {
         "train_profit_total": total_profit_train_bid_forecast,
@@ -366,16 +403,9 @@ def main(cfg):
         "test_profit_mean": mean_profit_test_bid_forecast,
     }
 
-    avg_metrics_bid_worse_forecast = {
-        "train_profit_total": total_profit_train_bid_worse_forecast,
-        "train_profit_mean": mean_profit_train_bid_worse_forecast,
-        "test_profit_total": total_profit_test_bid_worse_forecast,
-        "test_profit_mean": mean_profit_test_bid_worse_forecast,
-    }
-
     results_hindsight_df = pd.DataFrame(all_results_hindsight)
+    results_policy_df = pd.DataFrame(all_results_policy)
     results_bid_forecast_df = pd.DataFrame(all_results_bid_forecast)
-    results_bid_worse_forecast_df = pd.DataFrame(all_results_bid_worse_forecast)
 
     # Save results to CSV
     save_path = Path(__file__).resolve().parent.parent.parent / "reports" / cfg.experiments.experiment_name
@@ -386,6 +416,13 @@ def main(cfg):
             for key, value in avg_metrics_hindsight.items():
                 f.write(f"{key}: {value}\n")
 
+    save_path_policy = save_path / "single_policy" / cfg.datasets.dataset_name
+    save_path_policy.mkdir(parents=True, exist_ok=True)
+    results_policy_df.to_csv(save_path_policy / "backtest_results.csv", index=False)
+    with open(save_path_policy / "allwindows_metrics.txt", "w") as f:
+            for key, value in avg_metrics_policy.items():
+                f.write(f"{key}: {value}\n")
+
     save_path_bid_forecast = save_path / "bid_forecast" / cfg.datasets.dataset_name
     save_path_bid_forecast.mkdir(parents=True, exist_ok=True)
     results_bid_forecast_df.to_csv(save_path_bid_forecast / "backtest_results.csv", index=False)
@@ -393,21 +430,13 @@ def main(cfg):
             for key, value in avg_metrics_bid_forecast.items():
                 f.write(f"{key}: {value}\n")
 
-    save_path_bid_worse_forecast = save_path / "bid_worse_forecast" / cfg.datasets.dataset_name
-    save_path_bid_worse_forecast.mkdir(parents=True, exist_ok=True)
-    results_bid_worse_forecast_df.to_csv(save_path_bid_worse_forecast / "backtest_results.csv", index=False)
-    with open(save_path_bid_worse_forecast / "allwindows_metrics.txt", "w") as f:
-            for key, value in avg_metrics_bid_worse_forecast.items():
-                f.write(f"{key}: {value}\n")
-
     # Save all test results to a CSV file
-    all_test_results_dfs_bid_forecast.to_csv(save_path_bid_forecast / "all_test_results_hourly.csv", index=True)
-    logger.info(f"All test results saved to {save_path_bid_forecast / 'all_test_results_hourly.csv'}")
     all_test_results_dfs_hindsight.to_csv(save_path_hindsight / "all_test_results_hourly.csv", index=True)
     logger.info(f"All test results saved to {save_path_hindsight / 'all_test_results_hourly.csv'}")
-    all_test_results_dfs_bid_worse_forecast.to_csv(save_path_bid_worse_forecast / "all_test_results_hourly.csv", index=True)
-    logger.info(f"All test results saved to {save_path_bid_worse_forecast / 'all_test_results_hourly.csv'}")
-
+    all_test_results_dfs_policy.to_csv(save_path_policy / "all_test_results_hourly.csv", index=True)
+    logger.info(f"All test results saved to {save_path_policy / 'all_test_results_hourly.csv'}")
+    all_test_results_dfs_bid_forecast.to_csv(save_path_bid_forecast / "all_test_results_hourly.csv", index=True)
+    logger.info(f"All test results saved to {save_path_bid_forecast / 'all_test_results_hourly.csv'}")
 
 
 if __name__ == "__main__":

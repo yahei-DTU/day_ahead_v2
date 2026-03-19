@@ -200,8 +200,10 @@ class XGBoostClassifier(xgb.XGBClassifier):
         colsample_bytree: float = 0.8,
         min_child_weight: float = 5,
         random_state: int | None = None,
+        auto_scale_pos_weight: bool = False,
         **kwargs,
     ):
+        self.auto_scale_pos_weight = auto_scale_pos_weight
         super().__init__(
             objective="binary:logistic",
             learning_rate=learning_rate,
@@ -225,6 +227,11 @@ class XGBoostClassifier(xgb.XGBClassifier):
             y (pd.Series): Target labels for training.
             **kwargs: Additional keyword arguments for fit.
         """
+        if self.auto_scale_pos_weight:
+            n_neg = (y == 0).sum()
+            n_pos = (y == 1).sum()
+            self.set_params(scale_pos_weight=n_neg / n_pos)
+            logger.info(f"Auto scale_pos_weight set to {n_neg / n_pos:.4f} (n_neg={n_neg}, n_pos={n_pos})")
         super().fit(X, y, **kwargs)
 
     def predict_proba(self, X: pd.DataFrame, **kwargs) -> np.ndarray:
@@ -270,6 +277,7 @@ class MLPClassifier(nn.Module):
         patience: int = 5,
         verbose: int = 1,
         optimizer: str = "Adam",
+        class_weight: str | None = None,
     ):
         super().__init__()
         torch.manual_seed(random_state)
@@ -299,6 +307,7 @@ class MLPClassifier(nn.Module):
         self.patience = patience
         self.verbose = verbose
         self.optimizer = optimizer
+        self.class_weight = class_weight
 
         # Initialize classes_ attribute
         self.classes_ = None
@@ -340,7 +349,14 @@ class MLPClassifier(nn.Module):
         dataset = TensorDataset(X, y.unsqueeze(1))  # Ensure y is of shape (n_samples, 1)
         loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=False)
 
-        criterion = nn.BCEWithLogitsLoss()
+        if self.class_weight == "balanced":
+            n_neg = (y == 0).sum().item()
+            n_pos = (y == 1).sum().item()
+            pos_weight = torch.tensor([n_neg / n_pos], dtype=torch.float32).to(self.device)
+            logger.info(f"MLP pos_weight set to {n_neg / n_pos:.4f} (n_neg={n_neg}, n_pos={n_pos})")
+            criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        else:
+            criterion = nn.BCEWithLogitsLoss()
         optimizer = (optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
                      if self.optimizer == "Adam"
                      else optim.SGD(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay))

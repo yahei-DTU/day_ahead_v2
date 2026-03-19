@@ -1,6 +1,6 @@
 defaults:
   - datasets: data2025
-  - models: xgboost
+  - models: lightgbm
   - experiments: new2025
   - _self_
 

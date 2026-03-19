@@ -1,12 +1,16 @@
 import numpy as np
 import pandas as pd
+import linopy
 from sklearn.metrics import accuracy_score, roc_auc_score, f1_score
 from typing import Dict, Tuple
+from types import SimpleNamespace
+import xarray as xr
 import logging
+from day_ahead_v2.optimization import ModelClassPolicy
 
 logger = logging.getLogger(__name__)
 
-def evaluate_classifier(model, X: pd.DataFrame = None, y: pd.Series = None) -> Tuple[Dict[str, float], pd.DataFrame]:
+def evaluate_classifier(model, X: pd.DataFrame = None, y: pd.Series = None, fallback_class: int = 2) -> Tuple[Dict[str, float], pd.DataFrame]:
     """
     Evaluate a multi-class model.
 
@@ -28,22 +32,31 @@ def evaluate_classifier(model, X: pd.DataFrame = None, y: pd.Series = None) -> T
     preds = model.predict(X)  # shape: (n_samples,)
     proba = model.predict_proba(X)  # shape: (n_samples, n_classes)
 
+    # Filter fallback class predictions for metrics calculation
+    mask = y.values != fallback_class
+    if mask.sum() == 0:
+        logger.warning("All samples belong to the fallback class. Metrics will be set to NaN.")
+        return {"accuracy": np.nan, "roc_auc": np.nan, "f1_score": np.nan}, pd.DataFrame()
+    y_filtered = y[mask]
+    preds_filtered = preds[mask]
+    proba_filtered = proba[mask]
+
     # Accuracy
     try:
-        accuracy = accuracy_score(y.values, preds)
+        accuracy = accuracy_score(y_filtered.values, preds_filtered)
     except ValueError as e:
         accuracy = np.nan
         logger.warning(f"Accuracy could not be computed: {e}")
 
     # ROC-AUC
     try:
-        auc = roc_auc_score(y.values, proba[:, 1])
+        auc = roc_auc_score(y_filtered.values, proba_filtered[:, 1])
     except ValueError as e:
         auc = np.nan
         logger.warning(f"ROC-AUC could not be computed: {e}")
     # F1 score (macro)
     try:
-        f1 = f1_score(y.values, preds)
+        f1 = f1_score(y_filtered.values, preds_filtered)
     except ValueError as e:
         f1 = np.nan
         logger.warning(f"F1 score could not be computed: {e}")
@@ -60,16 +73,17 @@ def evaluate_classifier(model, X: pd.DataFrame = None, y: pd.Series = None) -> T
 
     return metrics, results_df
 
-def compute_accuracy_f1(y_true: pd.Series, y_pred: pd.Series) -> Dict[str, float]:
+def compute_accuracy_f1(y_true: pd.Series, y_pred: pd.Series, y_score: pd.Series | None = None) -> Dict[str, float]:
     """
-    Compute classification metrics: accuracy, and F1 score (macro).
+    Compute classification metrics: accuracy, F1 score (macro), and optionally ROC-AUC.
 
     Args:
         y_true (pd.Series): True labels.
         y_pred (pd.Series): Predicted labels.
+        y_score (pd.Series, optional): Predicted probabilities for the positive class (for ROC-AUC).
 
     Returns:
-        Dict[str, float]: Dictionary with accuracy and F1 score.
+        Dict[str, float]: Dictionary with accuracy, F1 score, and optionally ROC-AUC.
     """
     metrics = {}
     try:
@@ -83,6 +97,13 @@ def compute_accuracy_f1(y_true: pd.Series, y_pred: pd.Series) -> Dict[str, float
     except ValueError:
         metrics["f1_score"] = np.nan
         logger.warning("F1 score could not be computed due to a ValueError.")
+
+    if y_score is not None:
+        try:
+            metrics["roc_auc"] = roc_auc_score(y_true, y_score)
+        except ValueError as e:
+            metrics["roc_auc"] = np.nan
+            logger.warning(f"ROC-AUC could not be computed: {e}")
 
     return metrics
 
@@ -119,10 +140,152 @@ def threshold_predictions(cfg, proba: np.ndarray, alpha: float) -> pd.DataFrame:
     # return df with preds and uncertain flag
     return pd.DataFrame({
         "thresholded_label": preds,
+        "predicted_proba": proba.max(axis=1),
         "uncertain": uncertain
     }, index=range(len(preds)))
 
-def calculate_bids(cfg, data_df: pd.DataFrame, features: pd.DataFrame, preds_df: pd.DataFrame, optimizers: dict) -> pd.Series:
+def calculate_hydrogen_balancing_bids(cfg, p_DA: pd.Series, lambda_B_hat: pd.Series, P_W_hat: pd.Series) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    parameters = SimpleNamespace()
+    constants = SimpleNamespace()
+    results = SimpleNamespace()
+
+    assert lambda_B_hat.index.equals(p_DA.index)
+    assert P_W_hat.index.equals(p_DA.index)
+
+    # Constants
+    constants.T = lambda_B_hat.index
+    constants.D = lambda_B_hat.index.floor("D").to_numpy()
+    constants.DAY_INDEX, constants.DAY_VALUES = pd.factorize(
+        lambda_B_hat.index.normalize()
+    )
+    constants.DAYS = range(len(constants.DAY_VALUES))
+    constants.P_W_BAR = cfg.experiments.optimization_parameters.wind_capacity
+    constants.P_H_BAR = cfg.experiments.optimization_parameters.electrolyzer_capacity
+    constants.H2_PRICE = cfg.experiments.optimization_parameters.hydrogen_price
+    constants.ELECTROLYZER_LOAD_MIN = cfg.experiments.optimization_parameters.electrolyzer_load_min*cfg.experiments.optimization_parameters.electrolyzer_capacity
+    constants.A = cfg.experiments.optimization_parameters.a # List of linear segments for hydrogen production function (kg/MWh)
+    constants.B = cfg.experiments.optimization_parameters.b # List of intercepts for hydrogen production function (kg)
+    constants.SEGMENTS = range(len(constants.A))
+    constants.H2_MIN = cfg.experiments.optimization_parameters.minimum_daily_hydrogen
+
+    # Parameters
+    parameters.p_DA = xr.DataArray(
+        p_DA,
+        dims=["datetime"],
+        coords={
+            "datetime": constants.T,
+            "day": ("datetime", constants.D)
+            }
+    )
+    parameters.lambda_B_hat = xr.DataArray(
+        lambda_B_hat,
+        dims=["datetime"],
+        coords={
+            "datetime": constants.T,
+            "day": ("datetime", constants.D)
+        }
+    )
+    parameters.P_W_hat = xr.DataArray(
+        P_W_hat,
+        dims=["datetime"],
+        coords={
+            "datetime": constants.T,
+            "day": ("datetime", constants.D)
+        }
+    )
+    parameters.A = xr.DataArray(
+        constants.A,
+        dims=["segment"],
+        coords={"segment": constants.SEGMENTS}
+    )
+    parameters.B = xr.DataArray(
+        constants.B,
+        dims=["segment"],
+        coords={"segment": constants.SEGMENTS}
+    )
+
+    # Create optimization model
+    model = linopy.Model()
+
+    # Add decision variables
+    model.add_variables(
+        dims=["datetime"],
+        coords={"datetime": constants.T,
+                "day": ("datetime", constants.D)},
+        name="p_B"
+    )
+    model.add_variables(
+        lower=constants.ELECTROLYZER_LOAD_MIN,
+        upper=constants.P_H_BAR,
+        dims=["datetime"],
+        coords={"datetime": constants.T,
+                "day": ("datetime", constants.D)},
+        name="p_H"
+    )
+    model.add_variables(
+        lower=0,
+        dims=["datetime"],
+        coords={"datetime": constants.T,
+                "day": ("datetime", constants.D)},
+        name="h"
+    )
+
+    # Add objective
+    model.add_objective(
+        (model.variables["p_B"] * parameters.lambda_B_hat).sum()
+        + (model.variables["h"] * constants.H2_PRICE).sum(),
+        sense="max"
+    )
+
+    # Add constraints
+    model.add_constraints(
+        model.variables["p_B"] + model.variables["p_H"] == parameters.P_W_hat - parameters.p_DA,
+        name="power_balance"
+    )
+    model.add_constraints(
+        model.variables["h"]
+        <= parameters.A * model.variables["p_H"]
+        + parameters.B,
+        name="hydrogen_production"
+    )
+    for d in constants.DAYS:
+        mask = constants.DAY_INDEX == d
+        model.add_constraints(
+            model.variables["h"][mask].sum() >= constants.H2_MIN,
+            name=f"daily_hydrogen_{d}"
+        )
+
+    # Log model properties for debugging
+    logger.debug("Built model with following properties:")
+    # Variables
+    for var_name in model.variables:
+        var = model.variables[var_name]
+        logger.debug(f"\tVariable: {var_name}, dims={var.dims}, shape={var.shape}")
+    # Constraints
+    for con_name, con in model.constraints.items():
+        # Use .sizes if available
+        sizes = getattr(con, "sizes", None)
+        if sizes is not None:
+            dims_str = ", ".join(f"{k}:{v}" for k, v in sizes.items())
+        else:
+            dims_str = "unknown"
+        logger.debug(f"\tConstraint: {con_name}, dims={dims_str}")
+
+    # Solve model
+    model.solve(solver_name="highs")
+
+    # Save results
+    results.status = model.status
+    if results.status != "ok":
+        logger.error(f"Optimization of hydrogen and balancing bids did not solve successfully. Status: {results.status}")
+    logger.info(f"Optimization status: {results.status}")
+    results.p_B = model.variables["p_B"].solution.to_pandas()
+    results.p_H = model.variables["p_H"].solution.to_pandas()
+    results.h = model.variables["h"].solution.to_pandas()
+
+    return results.p_B, results.p_H, results.h
+
+def calculate_bids(cfg, data_df: pd.DataFrame, features: pd.DataFrame, preds_df: pd.DataFrame, trained_optimizer: ModelClassPolicy) -> pd.Series:
     """Calculate the bids for best optimization parameters"""
     lambda_max = 1000 # max lambda for bidding curve
     lambda_step = 2  # step size of bids
@@ -135,70 +298,64 @@ def calculate_bids(cfg, data_df: pd.DataFrame, features: pd.DataFrame, preds_df:
     lambda_B_hat = data_df[cfg.datasets.optimization.lambda_B_hat]
     features = features.copy()
     features["intercept"] = 1.0
-    model_mapping = cfg.datasets.optimization.model_mapping
-    logger.info(f"optimizers: {optimizers}")
-    DA_bids = pd.Series(index=data_df.index, dtype=float)
-    IM_bids = pd.Series(index=data_df.index, dtype=float)
-    if preds_df["uncertain"].dtype != bool:
-        preds_df["uncertain"] = preds_df["uncertain"].astype(bool)
-    for label in np.unique(preds_df["thresholded_label"]):
-        label = int(label)  # Ensure label is int for mapping
-        model_name = model_mapping[label]
-        optimizer = optimizers[model_name]
-        if label == cfg.datasets.training.fallback_class:
-            preds_label = preds_df[(preds_df["thresholded_label"] == label) | (preds_df["uncertain"])]
-        else:
-            preds_label = preds_df[
-                (preds_df["thresholded_label"] == label) &
-                (~preds_df["uncertain"])
-            ]
-        if not preds_label.empty:
-            bid_lambda_DA = np.arange(0,lambda_max,lambda_step) # Discretization for bidding curve, actual bids follow from curve
-            bid_p_DA = np.zeros((len(preds_label),len(bid_lambda_DA)))
-            bid_p_DA = pd.DataFrame(bid_p_DA, index=preds_label.index, columns=bid_lambda_DA)
-            if label != cfg.datasets.training.fallback_class:
-                q = optimizer.results.q.copy()
-                q = q.drop('lambda_DA_hat')
-            for t in preds_label.index:
-                # Check for negative prices and handle accordingly
-                if lambda_DA_hat.loc[t] < 0:
-                    logger.warning(f"Negative price detected at time {t}: lambda_DA_hat={lambda_DA_hat.loc[t]}. Setting DA bid to 0.")
-                    DA_bids.loc[t] = 0.0
-                    IM_bids.loc[t] = P_W_hat.loc[t] - DA_bids.loc[t]
-                    if lambda_B_hat.loc[t] < 0:
-                        logger.warning(f"Negative imbalance price detected at time {t}: lambda_B_hat={lambda_B_hat.loc[t]}. Setting IM bid to 0.")
-                        IM_bids.loc[t] = 0.0
-                    continue
-                # Loop through discretized steps of bidding curve to find optimal bid
-                if label == cfg.datasets.training.fallback_class:
-                    DA_bids.loc[t] = P_W_tilde.loc[t]
-                    IM_bids.loc[t] = P_W_hat.loc[t] - DA_bids.loc[t]
-                    continue
-                for k in bid_p_DA.columns:
-                    a_DA = optimizer.results.q["lambda_DA_hat"]
-                    b_DA = features.loc[t,:] @ q
-                    if bid_lambda_DA[k] > lambda_DA_hat.loc[t]:
-                        DA_bids.loc[t] = bid_p_DA.loc[t,k-lambda_step]
-                        IM_bids.loc[t] = P_W_hat.loc[t] - DA_bids.loc[t]
-                        break
-                    bid_p_DA.loc[t,k] = P_W_tilde.loc[t] + np.maximum(np.minimum(a_DA * bid_lambda_DA[k] + b_DA,cfg.experiments.optimization_parameters.wind_capacity),-cfg.experiments.optimization_parameters.electrolyzer_capacity)
+    p_DA = pd.Series(index=data_df.index, dtype=float)
+    bid_lambda_DA = np.arange(0,lambda_max,lambda_step) # Discretization for bidding curve, actual bids follow from curve
+    bid_p_DA = np.zeros((len(data_df),len(bid_lambda_DA)))
+    bid_p_DA = pd.DataFrame(bid_p_DA, index=data_df.index, columns=bid_lambda_DA)
+    q_0 = trained_optimizer.results.q_0.copy()
+    q_1 = trained_optimizer.results.q_1.copy()
+    q_2 = trained_optimizer.results.q_2.copy()
+    q_map = {
+        0: q_0,
+        1: q_1,
+        2: q_2,
+    }
 
-    # Check if any DA_bids are still NaN (e.g., due to all predictions being uncertain or fallback class)
-    if DA_bids.isna().any():
-        logger.error(f"{DA_bids.isna().sum()} DA bids are NaN. Check calculate_bids method.")
-        DA_bids.fillna(P_W_tilde, inplace=True)
-    if IM_bids.isna().any():
-        logger.error(f"{IM_bids.isna().sum()} IM bids are NaN. Check calculate_bids method.")
-        IM_bids.fillna(0, inplace=True)
+    for t in data_df.index:
+        if lambda_DA_hat.loc[t] < 0:
+            logger.warning(f"Negative price detected at time {t}: lambda_DA_hat={lambda_DA_hat.loc[t]}. Setting DA bid to 0.")
+            p_DA.loc[t] = -cfg.experiments.optimization_parameters.electrolyzer_capacity
+            continue
 
-    return DA_bids, IM_bids
+        pred_class = preds_df.loc[t, "thresholded_label"]
+
+        # Select correct q
+        q = q_map.get(pred_class)
+        if q is None:
+            logger.warning(f"Unknown class {pred_class} at time {t}. Skipping.")
+            continue
+
+        for k in bid_p_DA.columns:
+            a_DA = q["lambda_DA_hat"]
+            b_DA = features.loc[t, :] @ q.drop("lambda_DA_hat")
+
+            if bid_lambda_DA[k] > lambda_DA_hat.loc[t]:
+                p_DA.loc[t] = bid_p_DA.loc[t, k - lambda_step]
+                break
+
+            bid_p_DA.loc[t, k] = np.maximum(
+                np.minimum(
+                    P_W_tilde.loc[t] + a_DA * bid_lambda_DA[k] + b_DA,
+                    cfg.experiments.optimization_parameters.wind_capacity
+                ),
+                -cfg.experiments.optimization_parameters.electrolyzer_capacity
+            )
+
+    # Check if any p_DA are still NaN (e.g., due to all predictions being uncertain or fallback class)
+    if p_DA.isna().any():
+        logger.error(f"{p_DA.isna().sum()} DA bids are NaN. Check calculate_bids method.")
+        p_DA.fillna(P_W_tilde, inplace=True)
+
+    p_B, p_H, h = calculate_hydrogen_balancing_bids(cfg, p_DA, lambda_B_hat, P_W_hat)
+
+    return p_DA, p_B, p_H, h
 
 
-def calculate_profit(DA_bids: pd.Series, IM_bids: pd.Series, lambda_DA_hat: pd.Series, lambda_B_hat: pd.Series) -> pd.Series:
+def calculate_profit(p_DA: pd.Series, h: pd.Series, p_B: pd.Series, lambda_DA_hat: pd.Series, lambda_H: pd.Series | float, lambda_B_hat: pd.Series) -> pd.Series:
     """
     Calculate profit based on realized day-ahead and imbalance prices, realized wind production.
     """
-    profit = DA_bids * lambda_DA_hat + IM_bids * lambda_B_hat
+    profit = p_DA * lambda_DA_hat + h * lambda_H + p_B * lambda_B_hat
     # Check for NaN values in profit
     if profit.isna().any():
         logger.error(f"{profit.isna().sum()} profit values are NaN. Check calculate_profit method.")

@@ -12,6 +12,7 @@ model_parameters:
   weight_decay: 1e-4
   random_state: ${seed}
   device: cpu                  # or "cuda"
+  class_weight: "balanced"     # auto-weight classes by inverse frequency
 
 model_hyperparameters:
   hidden_dims:

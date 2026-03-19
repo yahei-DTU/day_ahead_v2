@@ -7,6 +7,7 @@ model_parameters:
   subsample: 0.7                     # row sampling → reduces memorization
   subsample_freq: 1                  # apply subsampling at every iteration
   feature_fraction: 0.7              # feature sampling → reduce greediness
+  is_unbalance: true                 # auto-weight classes by inverse frequency
   random_state: ${seed}
   bagging_seed: ${seed}
   feature_fraction_seed: ${seed}

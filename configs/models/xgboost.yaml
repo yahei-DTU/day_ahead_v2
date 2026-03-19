@@ -3,6 +3,7 @@ model_name: "xgboost"
 
 model_parameters:
   random_state: ${seed}
+  auto_scale_pos_weight: true        # auto-weight classes by inverse frequency
 
 model_hyperparameters:
   learning_rate: [0.01, 0.03]        # slower learning → smoother, less overfit
