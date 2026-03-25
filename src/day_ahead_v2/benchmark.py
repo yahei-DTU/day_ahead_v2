@@ -32,49 +32,6 @@ def simulate_ar1_errors(index, phi, sigma, initial_error):
         errors[i] = phi * errors[i-1] + eps
     return pd.Series(errors, index=index)
 
-def calculate_bids(cfg, data_df: pd.DataFrame, features: pd.DataFrame, trained_optimizer: ModelSinglePolicy) -> pd.Series:
-    """Calculate the bids for best optimization parameters"""
-    lambda_max = 1000 # max lambda for bidding curve
-    lambda_step = 2  # step size of bids
-    P_W_tilde = data_df[cfg.datasets.optimization.P_W_tilde]
-    if P_W_tilde.isna().any():
-        logger.error(f"{P_W_tilde.isna().sum()} values in P_W_tilde are NaN. Check data preprocessing.")
-        # P_W_tilde.fillna(0, inplace=True)
-    P_W_hat = data_df[cfg.datasets.optimization.P_W_hat]
-    lambda_DA_hat = data_df[cfg.datasets.optimization.lambda_DA_hat]
-    lambda_B_hat = data_df[cfg.datasets.optimization.lambda_B_hat]
-    features = features.copy()
-    features["intercept"] = 1.0
-    p_DA = pd.Series(index=data_df.index, dtype=float)
-    bid_lambda_DA = np.arange(0,lambda_max,lambda_step) # Discretization for bidding curve, actual bids follow from curve
-    bid_p_DA = np.zeros((len(data_df),len(bid_lambda_DA)))
-    bid_p_DA = pd.DataFrame(bid_p_DA, index=data_df.index, columns=bid_lambda_DA)
-    q = trained_optimizer.results.q.copy()
-    q = q.drop('lambda_DA_hat')
-    for t in data_df.index:
-        # Check for negative prices and handle accordingly
-        if lambda_DA_hat.loc[t] < 0:
-            logger.warning(f"Negative price detected at time {t}: lambda_DA_hat={lambda_DA_hat.loc[t]}. Setting DA bid to 0.")
-            p_DA.loc[t] = -cfg.experiments.optimization_parameters.electrolyzer_capacity
-            continue
-        # Loop through discretized steps of bidding curve to find optimal bid
-        for k in bid_p_DA.columns:
-            a_DA = trained_optimizer.results.q["lambda_DA_hat"]
-            b_DA = features.loc[t,:] @ q
-            if bid_lambda_DA[k] > lambda_DA_hat.loc[t]:
-                p_DA.loc[t] = bid_p_DA.loc[t,k-lambda_step]
-                break
-            bid_p_DA.loc[t,k] = np.maximum(np.minimum(P_W_tilde.loc[t] + a_DA * bid_lambda_DA[k] + b_DA,cfg.experiments.optimization_parameters.wind_capacity),-cfg.experiments.optimization_parameters.electrolyzer_capacity)
-
-    # Check if any p_DA are still NaN (e.g., due to all predictions being uncertain or fallback class)
-    if p_DA.isna().any():
-        logger.error(f"{p_DA.isna().sum()} DA bids are NaN. Check calculate_bids method.")
-        p_DA.fillna(P_W_tilde, inplace=True)
-
-    p_B, p_H, h = calculate_hydrogen_balancing_bids(cfg, p_DA, lambda_B_hat, P_W_hat)
-
-    return p_DA, p_B, p_H, h
-
 @hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev")
 def main(cfg):
     H2_PRICE = cfg.experiments.optimization_parameters.hydrogen_price
@@ -269,7 +226,7 @@ def main(cfg):
         p_B_train = pd.Series(single_policy_model_train.results.p_B, index=data_train.index)
         p_H_train = pd.Series(single_policy_model_train.results.p_H, index=data_train.index)
         h_train = pd.Series(single_policy_model_train.results.h, index=data_train.index)
-        p_DA_test, p_B_test, p_H_test, h_test = calculate_bids(cfg, data_test, X_test, single_policy_model_train)
+        p_DA_test, p_B_test, p_H_test, h_test = single_policy_model_train.calculate_bids(cfg, data_test, X_test)
         profit_train = calculate_profit(p_DA_train, h_train, p_B_train, lambda_DA_hat_train, H2_PRICE, lambda_B_hat_train)
         profit_test = calculate_profit(p_DA_test, h_test, p_B_test, lambda_DA_hat_test, H2_PRICE, lambda_B_hat_test)
         # Add bids and profit to results dfs
@@ -373,34 +330,40 @@ def main(cfg):
     # Save results
     total_profit_train_hindsight = all_train_results_dfs_hindsight["profit"].sum()
     mean_profit_train_hindsight = all_train_results_dfs_hindsight["profit"].mean()
+    std_profit_train_hindsight = all_train_results_dfs_hindsight["profit"].std()
     total_profit_test_hindsight = all_test_results_dfs_hindsight["profit"].sum()
     mean_profit_test_hindsight = all_test_results_dfs_hindsight["profit"].mean()
+    std_profit_test_hindsight = all_test_results_dfs_hindsight["profit"].std()
     total_profit_train_policy = all_train_results_dfs_policy["profit"].sum()
     mean_profit_train_policy = all_train_results_dfs_policy["profit"].mean()
+    std_profit_train_policy = all_train_results_dfs_policy["profit"].std()
     total_profit_test_policy = all_test_results_dfs_policy["profit"].sum()
     mean_profit_test_policy = all_test_results_dfs_policy["profit"].mean()
+    std_profit_test_policy = all_test_results_dfs_policy["profit"].std()
     total_profit_train_bid_forecast = all_train_results_dfs_bid_forecast["profit"].sum()
     mean_profit_train_bid_forecast = all_train_results_dfs_bid_forecast["profit"].mean()
+    std_profit_train_bid_forecast = all_train_results_dfs_bid_forecast["profit"].std()
     total_profit_test_bid_forecast = all_test_results_dfs_bid_forecast["profit"].sum()
     mean_profit_test_bid_forecast = all_test_results_dfs_bid_forecast["profit"].mean()
+    std_profit_test_bid_forecast = all_test_results_dfs_bid_forecast["profit"].std()
 
     avg_metrics_hindsight = {
         "train_profit_total": total_profit_train_hindsight,
-        "train_profit_mean": mean_profit_train_hindsight,
+        "train_profit_mean": f"{mean_profit_train_hindsight:.2f} ± {std_profit_train_hindsight:.2f}",
         "test_profit_total": total_profit_test_hindsight,
-        "test_profit_mean": mean_profit_test_hindsight,
+        "test_profit_mean": f"{mean_profit_test_hindsight:.2f} ± {std_profit_test_hindsight:.2f}",
     }
     avg_metrics_policy = {
         "train_profit_total": total_profit_train_policy,
-        "train_profit_mean": mean_profit_train_policy,
+        "train_profit_mean": f"{mean_profit_train_policy:.2f} ± {std_profit_train_policy:.2f}",
         "test_profit_total": total_profit_test_policy,
-        "test_profit_mean": mean_profit_test_policy,
+        "test_profit_mean": f"{mean_profit_test_policy:.2f} ± {std_profit_test_policy:.2f}",
     }
     avg_metrics_bid_forecast = {
         "train_profit_total": total_profit_train_bid_forecast,
-        "train_profit_mean": mean_profit_train_bid_forecast,
+        "train_profit_mean": f"{mean_profit_train_bid_forecast:.2f} ± {std_profit_train_bid_forecast:.2f}",
         "test_profit_total": total_profit_test_bid_forecast,
-        "test_profit_mean": mean_profit_test_bid_forecast,
+        "test_profit_mean": f"{mean_profit_test_bid_forecast:.2f} ± {std_profit_test_bid_forecast:.2f}",
     }
 
     results_hindsight_df = pd.DataFrame(all_results_hindsight)

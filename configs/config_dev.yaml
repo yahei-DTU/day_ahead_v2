@@ -1,7 +1,7 @@
 defaults:
   - datasets: data2025
   - models: lightgbm
-  - experiments: new2025
+  - experiments: 2025_dev
   - _self_
 
 seed: 42
@@ -16,4 +16,4 @@ hydra:
     level: DEBUG
 
 results:
-  save_path: "reports/${experiments.experiment_name}/${models.model_name}/${datasets.dataset_name}/"
+  save_path: "reports/${experiments.experiment_name}/${models.model_name}/${datasets.dataset_name}/${experiments.optimization_parameters.model}/${experiments.optimization_parameters.cvar_limit}/"

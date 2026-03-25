@@ -13,6 +13,7 @@ model_parameters:
   feature_fraction_seed: ${seed}
   data_random_seed: ${seed}
   n_jobs: 4
+  verbosity: -1
   reg_alpha: 0.1                      # L1 regularization on leaf weights
   reg_lambda: 10                      # L2 regularization on leaf weights
   min_split_gain: 0.5                 # require meaningful gain to split

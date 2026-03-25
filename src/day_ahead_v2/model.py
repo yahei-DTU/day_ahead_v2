@@ -24,16 +24,19 @@ class LogisticRegression(sklearn.linear_model.LogisticRegression):
         super().__init__(C=C, solver=solver, max_iter=max_iter, l1_ratio=l1_ratio, **kwargs)
         logger.info("LogisticRegression initialized with parameters")
 
-    def fit(self, X: pd.DataFrame, y: pd.Series, **kwargs) -> None:
+    def fit(self, X: pd.DataFrame, y: pd.Series, sample_weight=None, **kwargs) -> None:
         """
         Fit the Logistic Regression model.
 
         Args:
             X (pd.DataFrame): Feature data for training.
             y (pd.Series): Target labels for training.
+            sample_weight: Optional per-sample weights.
             **kwargs: Additional keyword arguments for fit.
         """
-        super().fit(X, y, **kwargs)
+        if sample_weight is not None:
+            sample_weight = sample_weight / sample_weight.mean()
+        super().fit(X, y, sample_weight=sample_weight, **kwargs)
 
     def predict_proba(self, X: pd.DataFrame, **kwargs) -> np.ndarray:
         """
@@ -93,10 +96,12 @@ class GaussianProcessClassifier(sklearn.gaussian_process.GaussianProcessClassifi
         )
         logger.info("GaussianProcessClassifier initialized with parameters")
 
-    def fit(self, X: pd.DataFrame, y: pd.Series, **kwargs) -> None:
+    def fit(self, X: pd.DataFrame, y: pd.Series, sample_weight=None, **kwargs) -> None:
         """
         Fit the Gaussian Process Classifier.
         """
+        if sample_weight is not None:
+            logger.warning("GaussianProcessClassifier does not support sample_weight; ignoring.")
         super().fit(X, y, **kwargs)
 
     def predict_proba(self, X: pd.DataFrame, **kwargs) -> np.ndarray:
@@ -152,11 +157,13 @@ class LightGBMClassifier(lgb.LGBMClassifier):
         )
         logger.info("LightGBMClassifier initialized with parameters")
 
-    def fit(self, X: pd.DataFrame, y: pd.Series, **kwargs) -> None:
+    def fit(self, X: pd.DataFrame, y: pd.Series, sample_weight=None, **kwargs) -> None:
         """
         Fit LightGBM model.
         """
-        super().fit(X, y, **kwargs)
+        if sample_weight is not None:
+            sample_weight = sample_weight / sample_weight.mean()
+        super().fit(X, y, sample_weight=sample_weight, **kwargs)
 
     def predict_proba(self, X: pd.DataFrame, **kwargs) -> np.ndarray:
         """
@@ -218,21 +225,24 @@ class XGBoostClassifier(xgb.XGBClassifier):
             )
         logger.info("XGBoostClassifier initialized with parameters")
 
-    def fit(self, X: pd.DataFrame, y: pd.Series, **kwargs) -> None:
+    def fit(self, X: pd.DataFrame, y: pd.Series, sample_weight=None, **kwargs) -> None:
         """
         Fit the XGBoost model.
 
         Args:
             X (pd.DataFrame): Feature data for training.
             y (pd.Series): Target labels for training.
+            sample_weight: Optional per-sample weights.
             **kwargs: Additional keyword arguments for fit.
         """
+        if sample_weight is not None:
+            sample_weight = sample_weight / sample_weight.mean()
         if self.auto_scale_pos_weight:
             n_neg = (y == 0).sum()
             n_pos = (y == 1).sum()
             self.set_params(scale_pos_weight=n_neg / n_pos)
             logger.info(f"Auto scale_pos_weight set to {n_neg / n_pos:.4f} (n_neg={n_neg}, n_pos={n_pos})")
-        super().fit(X, y, **kwargs)
+        super().fit(X, y, sample_weight=sample_weight, **kwargs)
 
     def predict_proba(self, X: pd.DataFrame, **kwargs) -> np.ndarray:
         """
@@ -315,12 +325,13 @@ class MLPClassifier(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x)
 
-    def fit(self, X: torch.Tensor | np.ndarray | pd.DataFrame, y: torch.Tensor | np.ndarray | pd.Series):
+    def fit(self, X: torch.Tensor | np.ndarray | pd.DataFrame, y: torch.Tensor | np.ndarray | pd.Series, sample_weight=None):
         """
         Train the MLP classifier.
         Args:
             X: Input features (Tensor, ndarray, or DataFrame).
             y: Target labels (Tensor, ndarray, or Series).
+            sample_weight: Optional per-sample weights (Tensor, ndarray, Series, or None).
         """
         # Convert X to tensor
         if isinstance(X, pd.DataFrame):
@@ -334,6 +345,14 @@ class MLPClassifier(nn.Module):
         elif isinstance(y, np.ndarray):
             y = torch.tensor(y, dtype=torch.float32)
 
+        # Convert sample_weight to tensor and normalise to mean=1
+        if sample_weight is not None:
+            if isinstance(sample_weight, pd.Series):
+                sample_weight = torch.tensor(sample_weight.values, dtype=torch.float32)
+            elif isinstance(sample_weight, np.ndarray):
+                sample_weight = torch.tensor(sample_weight, dtype=torch.float32)
+            sample_weight = sample_weight / sample_weight.mean()
+
         # Set classes_ attribute
         self.classes_ = torch.unique(y).sort()[0].cpu().numpy()
         logger.info(f"Classes found in training data: {self.classes_}")
@@ -346,7 +365,10 @@ class MLPClassifier(nn.Module):
         if not torch.all((y == 0) | (y == 1)):
             raise ValueError("Binary labels must be 0 and 1.")
 
-        dataset = TensorDataset(X, y.unsqueeze(1))  # Ensure y is of shape (n_samples, 1)
+        if sample_weight is not None:
+            dataset = TensorDataset(X, y.unsqueeze(1), sample_weight.unsqueeze(1))
+        else:
+            dataset = TensorDataset(X, y.unsqueeze(1))
         loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=False)
 
         if self.class_weight == "balanced":
@@ -354,9 +376,9 @@ class MLPClassifier(nn.Module):
             n_pos = (y == 1).sum().item()
             pos_weight = torch.tensor([n_neg / n_pos], dtype=torch.float32).to(self.device)
             logger.info(f"MLP pos_weight set to {n_neg / n_pos:.4f} (n_neg={n_neg}, n_pos={n_pos})")
-            criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+            criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction="none")
         else:
-            criterion = nn.BCEWithLogitsLoss()
+            criterion = nn.BCEWithLogitsLoss(reduction="none")
         optimizer = (optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
                      if self.optimizer == "Adam"
                      else optim.SGD(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay))
@@ -370,11 +392,18 @@ class MLPClassifier(nn.Module):
         for epoch in iterator:
             epoch_loss = 0.0
             self.train()
-            for batch_X, batch_y in loader:
-                batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
+            for batch in loader:
+                if sample_weight is not None:
+                    batch_X, batch_y, batch_w = batch
+                    batch_X, batch_y, batch_w = batch_X.to(self.device), batch_y.to(self.device), batch_w.to(self.device)
+                else:
+                    batch_X, batch_y = batch
+                    batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
+                    batch_w = None
                 optimizer.zero_grad()
                 logits = self(batch_X)
-                loss = criterion(logits, batch_y)
+                losses = criterion(logits, batch_y)  # shape (N, 1)
+                loss = (losses * batch_w).mean() if batch_w is not None else losses.mean()
                 loss.backward()
                 optimizer.step()
 

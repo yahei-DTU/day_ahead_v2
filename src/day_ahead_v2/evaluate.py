@@ -6,8 +6,6 @@ from typing import Dict, Tuple
 from types import SimpleNamespace
 import xarray as xr
 import logging
-from day_ahead_v2.optimization import ModelClassPolicy
-
 logger = logging.getLogger(__name__)
 
 def evaluate_classifier(model, X: pd.DataFrame = None, y: pd.Series = None, fallback_class: int = 2) -> Tuple[Dict[str, float], pd.DataFrame]:
@@ -284,71 +282,6 @@ def calculate_hydrogen_balancing_bids(cfg, p_DA: pd.Series, lambda_B_hat: pd.Ser
     results.h = model.variables["h"].solution.to_pandas()
 
     return results.p_B, results.p_H, results.h
-
-def calculate_bids(cfg, data_df: pd.DataFrame, features: pd.DataFrame, preds_df: pd.DataFrame, trained_optimizer: ModelClassPolicy) -> pd.Series:
-    """Calculate the bids for best optimization parameters"""
-    lambda_max = 1000 # max lambda for bidding curve
-    lambda_step = 2  # step size of bids
-    P_W_tilde = data_df[cfg.datasets.optimization.P_W_tilde]
-    if P_W_tilde.isna().any():
-        logger.error(f"{P_W_tilde.isna().sum()} values in P_W_tilde are NaN. Check data preprocessing.")
-        # P_W_tilde.fillna(0, inplace=True)
-    P_W_hat = data_df[cfg.datasets.optimization.P_W_hat]
-    lambda_DA_hat = data_df[cfg.datasets.optimization.lambda_DA_hat]
-    lambda_B_hat = data_df[cfg.datasets.optimization.lambda_B_hat]
-    features = features.copy()
-    features["intercept"] = 1.0
-    p_DA = pd.Series(index=data_df.index, dtype=float)
-    bid_lambda_DA = np.arange(0,lambda_max,lambda_step) # Discretization for bidding curve, actual bids follow from curve
-    bid_p_DA = np.zeros((len(data_df),len(bid_lambda_DA)))
-    bid_p_DA = pd.DataFrame(bid_p_DA, index=data_df.index, columns=bid_lambda_DA)
-    q_0 = trained_optimizer.results.q_0.copy()
-    q_1 = trained_optimizer.results.q_1.copy()
-    q_2 = trained_optimizer.results.q_2.copy()
-    q_map = {
-        0: q_0,
-        1: q_1,
-        2: q_2,
-    }
-
-    for t in data_df.index:
-        if lambda_DA_hat.loc[t] < 0:
-            logger.warning(f"Negative price detected at time {t}: lambda_DA_hat={lambda_DA_hat.loc[t]}. Setting DA bid to 0.")
-            p_DA.loc[t] = -cfg.experiments.optimization_parameters.electrolyzer_capacity
-            continue
-
-        pred_class = preds_df.loc[t, "thresholded_label"]
-
-        # Select correct q
-        q = q_map.get(pred_class)
-        if q is None:
-            logger.warning(f"Unknown class {pred_class} at time {t}. Skipping.")
-            continue
-
-        for k in bid_p_DA.columns:
-            a_DA = q["lambda_DA_hat"]
-            b_DA = features.loc[t, :] @ q.drop("lambda_DA_hat")
-
-            if bid_lambda_DA[k] > lambda_DA_hat.loc[t]:
-                p_DA.loc[t] = bid_p_DA.loc[t, k - lambda_step]
-                break
-
-            bid_p_DA.loc[t, k] = np.maximum(
-                np.minimum(
-                    P_W_tilde.loc[t] + a_DA * bid_lambda_DA[k] + b_DA,
-                    cfg.experiments.optimization_parameters.wind_capacity
-                ),
-                -cfg.experiments.optimization_parameters.electrolyzer_capacity
-            )
-
-    # Check if any p_DA are still NaN (e.g., due to all predictions being uncertain or fallback class)
-    if p_DA.isna().any():
-        logger.error(f"{p_DA.isna().sum()} DA bids are NaN. Check calculate_bids method.")
-        p_DA.fillna(P_W_tilde, inplace=True)
-
-    p_B, p_H, h = calculate_hydrogen_balancing_bids(cfg, p_DA, lambda_B_hat, P_W_hat)
-
-    return p_DA, p_B, p_H, h
 
 
 def calculate_profit(p_DA: pd.Series, h: pd.Series, p_B: pd.Series, lambda_DA_hat: pd.Series, lambda_H: pd.Series | float, lambda_B_hat: pd.Series) -> pd.Series:

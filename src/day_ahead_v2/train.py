@@ -39,8 +39,8 @@ from sklearn.feature_selection import VarianceThreshold
 import lightgbm as lgb
 import shap
 from day_ahead_v2.data import PandasHandler, DataHandler
-from day_ahead_v2.optimization import ModelClassPolicy
-from day_ahead_v2.evaluate import evaluate_classifier, compute_accuracy_f1, threshold_predictions, calculate_bids, calculate_profit
+from day_ahead_v2.optimization import ModelClassPolicy, ModelAllOrNothing
+from day_ahead_v2.evaluate import evaluate_classifier, compute_accuracy_f1, threshold_predictions, calculate_profit
 from day_ahead_v2.utils.sanitize_names import sanitize_column_names
 from day_ahead_v2.utils import electrolyzer_efficiency
 
@@ -282,7 +282,7 @@ def feature_selection(cfg: DictConfig, data: pd.DataFrame, start: datetime, end:
     logger.info(f"Final number of selected features_flex: {len(selected_features_shap)}")
     cfg.datasets.training.feature_columns_flex = selected_features_shap
 
-def train_batch(cfg: DictConfig, X_train: pd.DataFrame, y_train: pd.Series, hyperparameters: dict) -> object:
+def train_batch(cfg: DictConfig, X_train: pd.DataFrame, y_train: pd.Series, hyperparameters: dict, sample_weight: pd.Series | None = None) -> object:
     """Train model for a single rolling window and hyperparameter set."""
     # X_train = X_train.copy()
     # y_train = y_train.copy()
@@ -307,9 +307,11 @@ def train_batch(cfg: DictConfig, X_train: pd.DataFrame, y_train: pd.Series, hype
         mask = y_train != cfg.datasets.training.fallback_class
         X_train = X_train[mask]
         y_train = y_train[mask]
+        if sample_weight is not None:
+            sample_weight = sample_weight[mask]
 
     # Fit model
-    model.fit(X_train, y_train)
+    model.fit(X_train, y_train, sample_weight=sample_weight)
     logger.info(f"Model trained with hyperparameters: {hyperparameters}")
 
     return model
@@ -329,9 +331,10 @@ def train_and_validate_params(
         X_val: pd.DataFrame,
         y_val: pd.Series,
         params: dict,
+        sample_weight: pd.Series | None = None,
     ) -> tuple[dict, float]:
     logger.debug(f"Training and validating with params: {params}")
-    model = train_batch(cfg, X_train, y_train, params)
+    model = train_batch(cfg, X_train, y_train, params, sample_weight=sample_weight)
     _, train_results_df = test_batch(cfg,model,X_train,y_train)
     metrics_test, val_results_df = test_batch(cfg, model, X_val, y_val)
     score = metrics_test.get("f1_score", np.nan)
@@ -363,6 +366,17 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
     logger.debug("Splitting features and target for training data...")
     X_train, y_train = split_features_target(cfg, data_train.data, sanitize_names=True)
     logger.info(f"Target counts in training data:\n{y_train.value_counts()}")
+    use_sample_weighting = cfg.experiments.train_parameters.get("sample_weighting", False)
+    if use_sample_weighting:
+        sample_weight_train = pd.Series(
+            np.abs(
+                data_train.data[cfg.datasets.optimization.lambda_DA_hat].values -
+                data_train.data[cfg.datasets.optimization.lambda_B_hat].values
+            ),
+            index=X_train.index,
+        )
+    else:
+        sample_weight_train = None
 
     logger.debug("Cutting validation data...")
     data_valid = data_handler.cut_data(valid_start, valid_end, cfg.datasets.training.datetime_column)
@@ -398,6 +412,7 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
             X_val,
             y_val,
             params,
+            sample_weight=sample_weight_train,
         )
         for params in hyperparameter_combinations
     )
@@ -474,7 +489,8 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
         lambda_B_hat = data_optimization[cfg.datasets.optimization.lambda_B_hat]
         P_W_hat = data_optimization[cfg.datasets.optimization.P_W_hat]
         P_W_tilde = data_optimization[cfg.datasets.optimization.P_W_tilde]
-        optimizer = ModelClassPolicy(
+        optimizer_cls = {"class_policy": ModelClassPolicy, "all_or_nothing": ModelAllOrNothing}[cfg.experiments.optimization_parameters.model]
+        optimizer = optimizer_cls(
             cfg = cfg,
             lambda_DA_hat = lambda_DA_hat,
             lambda_B_hat = lambda_B_hat,
@@ -521,11 +537,12 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
         datetime_index = X_.index
         data_optimization = data_handler.data.loc[datetime_index]
         X_features = pd.concat([X_val.loc[datetime_index], X_.loc[datetime_index][["predicted_proba"]]], axis=1)
-        p_DA_val, p_B_val, p_H_val, h_val = calculate_bids(cfg, data_optimization, X_features, threshold_preds_df_val, optimizer)
+        p_DA_val, p_B_val, p_H_val, h_val = optimizer.calculate_bids(cfg, data_optimization, X_features, threshold_preds_df_val)
         lambda_DA_hat_val = data_optimization[cfg.datasets.optimization.lambda_DA_hat]
         lambda_B_hat_val = data_optimization[cfg.datasets.optimization.lambda_B_hat]
         profit_val = calculate_profit(p_DA_val, h_val, p_B_val, lambda_DA_hat_val, cfg.experiments.optimization_parameters.hydrogen_price, lambda_B_hat_val)
         mean_profit_val = profit_val.mean()
+        logger.info(f"Alpha {alpha} → Mean profit on validation set: {mean_profit_val:.2f}, Total profit: {profit_val.sum():.2f}")
 
 
         if mean_profit_val > best_mean_profit:
@@ -541,7 +558,19 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
     X_train_full = pd.concat([X_train, X_val])
     y_train_full = pd.concat([y_train, y_val])
 
-    final_model = train_batch(cfg, X_train_full, y_train_full, best_params)
+    if use_sample_weighting:
+        sample_weight_val = pd.Series(
+            np.abs(
+                data_valid.data[cfg.datasets.optimization.lambda_DA_hat].values -
+                data_valid.data[cfg.datasets.optimization.lambda_B_hat].values
+            ),
+            index=X_val.index,
+        )
+        sample_weight_full = pd.concat([sample_weight_train, sample_weight_val])
+    else:
+        sample_weight_full = None
+
+    final_model = train_batch(cfg, X_train_full, y_train_full, best_params, sample_weight=sample_weight_full)
 
     # ---------------------------------------------
     # Final test evaluation
@@ -608,7 +637,8 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
     lambda_B_hat = data_train[cfg.datasets.optimization.lambda_B_hat]
     P_W_hat = data_train[cfg.datasets.optimization.P_W_hat]
     P_W_tilde = data_train[cfg.datasets.optimization.P_W_tilde]
-    optimizer_final = ModelClassPolicy(
+    optimizer_cls = {"class_policy": ModelClassPolicy, "all_or_nothing": ModelAllOrNothing}[cfg.experiments.optimization_parameters.model]
+    optimizer_final = optimizer_cls(
         cfg = cfg,
         lambda_DA_hat = lambda_DA_hat,
         lambda_B_hat = lambda_B_hat,
@@ -626,11 +656,10 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
     try:
         optimizer_final.run_optimization()
     except Exception as e:
-        logger.error(
-            f"Final optimization failed: {e}"
-        )
+        logger.error(f"Final optimization failed: {e}")
+        raise
     if optimizer_final.results.status != "ok":
-        logger.error(
+        raise RuntimeError(
             f"Final optimization did not converge for training data in window {window}. Status: {optimizer_final.results.status}"
         )
     p_DA_train = optimizer_final.results.p_DA
@@ -642,7 +671,7 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
         final_preds_test_df.loc[final_preds_test_df["thresholded_label"].isin(final_rare_labels), "thresholded_label"] = cfg.datasets.training.fallback_class
         logger.info(f"Final test: reassigned rare labels {final_rare_labels} to fallback_class to match final training.")
     X_features = pd.concat([X_test.loc[datetime_index_test], final_preds_test_df.loc[datetime_index_test][["predicted_proba"]]], axis=1)
-    p_DA_test, p_B_test, p_H_test, h_test = calculate_bids(cfg, data_test, X_features, final_preds_test_df, optimizer_final)
+    p_DA_test, p_B_test, p_H_test, h_test = optimizer_final.calculate_bids(cfg, data_test, X_features, final_preds_test_df)
 
     # Calculate profit for train and test sets
     lambda_DA_hat_train = data_train[cfg.datasets.optimization.lambda_DA_hat]
@@ -676,8 +705,12 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
     results = {
         "train_profit_total": profit_train.sum(),
         "train_profit_mean": profit_train.mean(),
+        "train_profit_std": profit_train.std(),
+        "train_profit_cvar": profit_train[profit_train <= np.percentile(profit_train, 5)].mean(),
         "test_profit_total": profit_test.sum(),
         "test_profit_mean": profit_test.mean(),
+        "test_profit_std": profit_test.std(),
+        "test_profit_cvar": profit_test[profit_test <= np.percentile(profit_test, 5)].mean(),
         **{f"train_{k}": v for k, v in train_metrics.items()},
         **{f"test_{k}": v for k, v in test_metrics.items()},
         **{f"train_thresholded_{k}": v for k, v in metrics_threshold_prediction_train.items()},
@@ -688,6 +721,7 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
         "valid_end": valid_end,
         "test_start": test_start,
         "test_end": test_end,
+        "CVaR": optimizer_final.results.CVaR if hasattr(optimizer_final.results, "CVaR") else np.nan,
         "best_alpha": best_alpha,
         **best_params,
     }
@@ -726,7 +760,8 @@ def run_backtest(cfg: DictConfig) -> list:
     windows = list(rolling_windows(cfg))
     logger.info(f"Running backtest over {len(windows)} windows...")
 
-    feature_selection(cfg, data_handler.data, start=windows[0]["train"][0], end=windows[0]["train"][1])
+    if cfg.experiments.train_parameters.get("feature_selection", False):
+        feature_selection(cfg, data_handler.data, start=windows[0]["train"][0], end=windows[0]["train"][1])
 
     # ---------------------------------------------
     # Rolling window backtest
@@ -761,13 +796,20 @@ def run_backtest(cfg: DictConfig) -> list:
             logger.info(f"Average thresholded {key} over all windows: {value}")
         total_profit_train = all_train_results_dfs["profit"].sum()
         mean_profit_train = all_train_results_dfs["profit"].mean()
+        std_profit_train = all_train_results_dfs["profit"].std()
+        profit_train = all_train_results_dfs["profit"]
+        var95_train = np.percentile(profit_train, 5)
+        cvar95_train = profit_train[profit_train <= var95_train].mean()
         logger.info(f"Total profit over all train windows: {total_profit_train}")
         logger.info(f"Mean profit over all train windows: {mean_profit_train}")
+        logger.info(f"CVaR 95% over all train windows: {cvar95_train}")
     else:
         avg_metrics_train = {}
         avg_metrics_thresholded_train = {}
         total_profit_train = 0
         mean_profit_train = 0
+        std_profit_train = np.nan
+        cvar95_train = np.nan
         logger.warning("No train results to compute average metrics.")
 
     if not all_test_results_dfs.empty:
@@ -786,13 +828,20 @@ def run_backtest(cfg: DictConfig) -> list:
             logger.info(f"Average thresholded {key} over all windows: {value}")
         total_profit_test = all_test_results_dfs["profit"].sum()
         mean_profit_test = all_test_results_dfs["profit"].mean()
+        std_profit_test = all_test_results_dfs["profit"].std()
+        profit_test = all_test_results_dfs["profit"]
+        var95_test = np.percentile(profit_test, 5)
+        cvar95_test = profit_test[profit_test <= var95_test].mean()
         logger.info(f"Total profit over all test windows: {total_profit_test}")
         logger.info(f"Mean profit over all test windows: {mean_profit_test}")
+        logger.info(f"CVaR 95% over all test windows: {cvar95_test}")
     else:
         avg_metrics_test = {}
         avg_metrics_thresholded_test = {}
         total_profit_test = 0
         mean_profit_test = 0
+        std_profit_test = np.nan
+        cvar95_test = np.nan
         logger.warning("No test results to compute average metrics.")
 
     avg_metrics = {
@@ -807,12 +856,14 @@ def run_backtest(cfg: DictConfig) -> list:
         "test_accuracy": avg_metrics_thresholded_test.get("accuracy", np.nan),
         "test_f1_score": avg_metrics_thresholded_test.get("f1_score", np.nan),
         "train_profit_total": total_profit_train,
-        "train_profit_mean": mean_profit_train,
+        "train_profit_mean": f"{mean_profit_train:.2f} ± {std_profit_train:.2f}",
+        "train_profit_cvar": cvar95_train,
         "test_profit_total": total_profit_test,
-        "test_profit_mean": mean_profit_test,
+        "test_profit_mean": f"{mean_profit_test:.2f} ± {std_profit_test:.2f}",
+        "test_profit_cvar": cvar95_test,
     }
     logger.info("Backtest completed.")
-    return all_results, avg_metrics, avg_metrics_thresholded, all_test_results_dfs
+    return all_results, avg_metrics, avg_metrics_thresholded, all_train_results_dfs, all_test_results_dfs
 
 @hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev")
 def main(cfg: DictConfig) -> None:
@@ -821,7 +872,7 @@ def main(cfg: DictConfig) -> None:
     random.seed(seed)
     np.random.seed(seed)
 
-    results, metrics, metrics_thresholded, all_test_results_dfs = run_backtest(cfg)
+    results, metrics, metrics_thresholded, all_train_results_dfs, all_test_results_dfs = run_backtest(cfg)
 
     if not results:
         logger.warning("No results generated")
@@ -845,7 +896,9 @@ def main(cfg: DictConfig) -> None:
         for key, value in metrics_thresholded.items():
             f.write(f"{key}: {value}\n")
 
-    # Save all test results to a CSV file
+    # Save all train and test results to CSV files
+    all_train_results_dfs.to_csv(save_path / "all_train_results_hourly.csv", index=True)
+    logger.info(f"All train results saved to {save_path / 'all_train_results_hourly.csv'}")
     all_test_results_dfs.to_csv(save_path / "all_test_results_hourly.csv", index=True)
     logger.info(f"All test results saved to {save_path / 'all_test_results_hourly.csv'}")
 
