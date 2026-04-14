@@ -18,7 +18,7 @@ experiment_parameters:
 
 # Optimization parameters
 optimization_parameters:
-  model: all_or_nothing # Optimization model to use (e.g., "class_policy", "all_or_nothing")
+  model: class_policy # Optimization model to use (e.g., "class_policy", "all_or_nothing")
   electrolyzer_capacity: 3.6 # MW, set to 0 to disable electrolyzer
   wind_capacity: 7.2 # MW
   hydrogen_price: 2.0 # EUR/kg
@@ -27,9 +27,9 @@ optimization_parameters:
   a: [] # Linear segments of hydrogen production function (kg/MWh)
   b: []
   minimum_daily_hydrogen: 100 # Minimum daily hydrogen production requirement (kg)
-  use_cvar_constraint: false # Whether to add a CVaR constraint on balancing cost
+  use_cvar_constraint: true # Whether to add a CVaR constraint on balancing cost
   cvar_alpha: 0.95 # Confidence level for CVaR
-  cvar_limit: 0.0 # Upper bound on CVaR of (lambda_DA_hat - lambda_B_hat)*p_B
+  cvar_limit: 1e2 # Upper bound on CVaR of (lambda_DA_hat - lambda_B_hat)*p_B
 
 feature_selection_parameters:
   shap_cumulative_importance_threshold: 0.9 # Threshold for cumulative importance in SHAP feature selection

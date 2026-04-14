@@ -27,6 +27,7 @@ import random
 import hydra
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
+import copy
 from datetime import datetime, timedelta
 import time
 import numpy as np
@@ -46,6 +47,11 @@ from day_ahead_v2.utils import electrolyzer_efficiency
 
 
 logger = logging.getLogger(__name__)
+
+OmegaConf.register_new_resolver(
+    "cvar_path",
+    lambda use_cvar, limit: f"/CVaR_{limit}" if use_cvar else ""
+)
 
 
 def rolling_windows(cfg: DictConfig):
@@ -280,7 +286,7 @@ def feature_selection(cfg: DictConfig, data: pd.DataFrame, start: datetime, end:
     logger.info(f"Selected {len(selected_features_shap)} features based on SHAP cumulative importance threshold of {shap_threshold}.")
 
     logger.info(f"Final number of selected features_flex: {len(selected_features_shap)}")
-    cfg.datasets.training.feature_columns_flex = selected_features_shap
+    return selected_features_shap
 
 def train_batch(cfg: DictConfig, X_train: pd.DataFrame, y_train: pd.Series, hyperparameters: dict, sample_weight: pd.Series | None = None) -> object:
     """Train model for a single rolling window and hyperparameter set."""
@@ -735,33 +741,19 @@ def run_backtest(cfg: DictConfig) -> list:
     # ---------------------------------------------
     # Data import and preprocessing
     # ---------------------------------------------
-    data_handler = PandasHandler(cfg)
-    data_handler = data_handler.cut_data(cfg.experiments.experiment_parameters.start_date,
+    raw_data_handler = PandasHandler(cfg)
+    raw_data_handler = raw_data_handler.cut_data(cfg.experiments.experiment_parameters.start_date,
                                         cfg.experiments.experiment_parameters.end_date,
                                         cfg.datasets.training.datetime_column,
                                         )
-    data_handler = data_handler.transform_data(cfg)
-
-    # Check for NaNs in data
-    nan_counts = data_handler.data.isnull().sum()
-    if nan_counts.sum() > 0:
-        logger.warning(f"Found NaN values in data:\n{nan_counts[nan_counts > 0]}")
-    else:
-        logger.info("No NaN values found in data")
 
     # ----------------------------------------------
     # Initialize the electrolyzer
     # ----------------------------------------------
     electrolyzer_efficiency.initiate_HYP_L(cfg)
 
-    # ---------------------------------------------
-    # Feature selection
-    # ---------------------------------------------
     windows = list(rolling_windows(cfg))
     logger.info(f"Running backtest over {len(windows)} windows...")
-
-    if cfg.experiments.train_parameters.get("feature_selection", False):
-        feature_selection(cfg, data_handler.data, start=windows[0]["train"][0], end=windows[0]["train"][1])
 
     # ---------------------------------------------
     # Rolling window backtest
@@ -770,8 +762,31 @@ def run_backtest(cfg: DictConfig) -> list:
     all_train_results_dfs = pd.DataFrame()
     all_test_results_dfs = pd.DataFrame()
 
+    # Create a snapshot of cfg to ensure each window starts with the same configuration (important if feature selection modifies cfg)
+    cfg_snapshot = copy.deepcopy(cfg)
+
     for window in windows:
         try:
+            # Make a deep copy of cfg for current window to avoid side effects
+            cfg = copy.deepcopy(cfg_snapshot)
+
+            # Transform data for current window
+            data_handler = raw_data_handler.transform_data(cfg)
+
+            # Check for NaNs in data
+            nan_counts = data_handler.data.isnull().sum()
+            if nan_counts.sum() > 0:
+                logger.warning(f"Found NaN values in data:\n{nan_counts[nan_counts > 0]}")
+            else:
+                logger.info("No NaN values found in data")
+
+            # Feature selection (optional, only on first window to avoid data leakage)
+            if cfg.experiments.train_parameters.get("feature_selection", False) and window == windows[0]:
+                selected_features = feature_selection(cfg, data_handler.data, start=window["train"][0], end=window["train"][1])
+                cfg.datasets.training.feature_columns_flex = selected_features
+                cfg_snapshot.datasets.training.feature_columns_flex = selected_features
+
+            # Train model and evaluate on test set for current window
             _, results, train_results_df, test_results_df = train_model(cfg, window, data_handler)
             all_results.append(results)
             all_train_results_dfs = pd.concat([all_train_results_dfs, train_results_df])

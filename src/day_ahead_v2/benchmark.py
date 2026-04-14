@@ -14,8 +14,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import hydra
-from omegaconf import OmegaConf
 import logging
+import copy
 from day_ahead_v2.optimization import ModelHindsight, ModelSinglePolicy
 from day_ahead_v2.data import PandasHandler
 from day_ahead_v2.train import rolling_windows, feature_selection, split_features_target
@@ -38,19 +38,11 @@ def main(cfg):
     # ---------------------------------------------
     # Import dataset
     # ---------------------------------------------
-    data_handler = PandasHandler(cfg)
-    data_handler = data_handler.cut_data(cfg.experiments.experiment_parameters.start_date,
+    raw_data_handler = PandasHandler(cfg)
+    raw_data_handler = raw_data_handler.cut_data(cfg.experiments.experiment_parameters.start_date,
                                         cfg.experiments.experiment_parameters.end_date,
                                         cfg.datasets.training.datetime_column,
                                         )
-    data_handler = data_handler.transform_data(cfg)
-
-    # Check for NaNs in data
-    nan_counts = data_handler.data.isnull().sum()
-    if nan_counts.sum() > 0:
-        logger.warning(f"Found NaN values in data:\n{nan_counts[nan_counts > 0]}")
-    else:
-        logger.info("No NaN values found in data")
 
     # ----------------------------------------------
     # Initialize the electrolyzer
@@ -61,8 +53,7 @@ def main(cfg):
     # Rolling window backtest
     # ---------------------------------------------
     windows = list(rolling_windows(cfg))
-
-    feature_selection(cfg, data_handler.data, start=windows[0]["train"][0], end=windows[0]["train"][1])
+    cfg_snapshot = copy.deepcopy(cfg)
 
     all_results_hindsight = []
     all_results_policy = []
@@ -85,6 +76,24 @@ def main(cfg):
             f"Valid: {valid_start.date()} → {valid_end.date()} | "
             f"Test: {test_start.date()} → {test_end.date()}"
         )
+
+        # Reset cfg and transform from raw data for each window
+        cfg = copy.deepcopy(cfg_snapshot)
+        data_handler = raw_data_handler.transform_data(cfg)
+
+        # Check for NaNs in data
+        nan_counts = data_handler.data.isnull().sum()
+        if nan_counts.sum() > 0:
+            logger.warning(f"Found NaN values in data:\n{nan_counts[nan_counts > 0]}")
+        else:
+            logger.info("No NaN values found in data")
+
+        # Feature selection (optional, only on first window)
+        if cfg.experiments.train_parameters.get("feature_selection", False) and window == windows[0]:
+            selected_features = feature_selection(cfg, data_handler.data, start=train_start, end=train_end)
+            cfg.datasets.training.feature_columns_flex = selected_features
+            cfg_snapshot.datasets.training.feature_columns_flex = selected_features
+
         # ---------------------------------------------
         # Data loading
         # ---------------------------------------------
@@ -258,15 +267,18 @@ def main(cfg):
         results_policy = {
             "train_profit_total": profit_train.sum(),
             "train_profit_mean": profit_train.mean(),
+            "train_profit_cvar": profit_train[profit_train <= np.percentile(profit_train, 5)].mean(),
             "test_profit_total": profit_test.sum(),
             "test_profit_mean": profit_test.mean(),
+            "test_profit_cvar": profit_test[profit_test <= np.percentile(profit_test, 5)].mean(),
             "train_start": train_start,
             "train_end": train_end,
             "valid_start": valid_start,
             "valid_end": valid_end,
             "test_start": test_start,
             "test_end": test_end,
-            "lambda_H": H2_PRICE
+            "lambda_H": H2_PRICE,
+            "CVaR": single_policy_model_train.results.CVaR if hasattr(single_policy_model_train.results, "CVaR") else np.nan,
         }
         all_results_policy.append(results_policy)
         all_train_results_dfs_policy = pd.concat([all_train_results_dfs_policy, results_policy_train_df])
@@ -337,15 +349,23 @@ def main(cfg):
     total_profit_train_policy = all_train_results_dfs_policy["profit"].sum()
     mean_profit_train_policy = all_train_results_dfs_policy["profit"].mean()
     std_profit_train_policy = all_train_results_dfs_policy["profit"].std()
+    profit_train_policy = all_train_results_dfs_policy["profit"]
+    cvar95_train_policy = profit_train_policy[profit_train_policy <= np.percentile(profit_train_policy, 5)].mean()
     total_profit_test_policy = all_test_results_dfs_policy["profit"].sum()
     mean_profit_test_policy = all_test_results_dfs_policy["profit"].mean()
     std_profit_test_policy = all_test_results_dfs_policy["profit"].std()
+    profit_test_policy = all_test_results_dfs_policy["profit"]
+    cvar95_test_policy = profit_test_policy[profit_test_policy <= np.percentile(profit_test_policy, 5)].mean()
     total_profit_train_bid_forecast = all_train_results_dfs_bid_forecast["profit"].sum()
     mean_profit_train_bid_forecast = all_train_results_dfs_bid_forecast["profit"].mean()
     std_profit_train_bid_forecast = all_train_results_dfs_bid_forecast["profit"].std()
+    profit_train_bid_forecast = all_train_results_dfs_bid_forecast["profit"]
+    cvar95_train_bid_forecast = profit_train_bid_forecast[profit_train_bid_forecast <= np.percentile(profit_train_bid_forecast, 5)].mean()
     total_profit_test_bid_forecast = all_test_results_dfs_bid_forecast["profit"].sum()
     mean_profit_test_bid_forecast = all_test_results_dfs_bid_forecast["profit"].mean()
     std_profit_test_bid_forecast = all_test_results_dfs_bid_forecast["profit"].std()
+    profit_test_bid_forecast = all_test_results_dfs_bid_forecast["profit"]
+    cvar95_test_bid_forecast = profit_test_bid_forecast[profit_test_bid_forecast <= np.percentile(profit_test_bid_forecast, 5)].mean()
 
     avg_metrics_hindsight = {
         "train_profit_total": total_profit_train_hindsight,
@@ -356,14 +376,18 @@ def main(cfg):
     avg_metrics_policy = {
         "train_profit_total": total_profit_train_policy,
         "train_profit_mean": f"{mean_profit_train_policy:.2f} ± {std_profit_train_policy:.2f}",
+        "train_profit_cvar": cvar95_train_policy,
         "test_profit_total": total_profit_test_policy,
         "test_profit_mean": f"{mean_profit_test_policy:.2f} ± {std_profit_test_policy:.2f}",
+        "test_profit_cvar": cvar95_test_policy,
     }
     avg_metrics_bid_forecast = {
         "train_profit_total": total_profit_train_bid_forecast,
         "train_profit_mean": f"{mean_profit_train_bid_forecast:.2f} ± {std_profit_train_bid_forecast:.2f}",
+        "train_profit_cvar": cvar95_train_bid_forecast,
         "test_profit_total": total_profit_test_bid_forecast,
         "test_profit_mean": f"{mean_profit_test_bid_forecast:.2f} ± {std_profit_test_bid_forecast:.2f}",
+        "test_profit_cvar": cvar95_test_bid_forecast,
     }
 
     results_hindsight_df = pd.DataFrame(all_results_hindsight)

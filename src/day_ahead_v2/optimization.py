@@ -265,6 +265,12 @@ class ModelSinglePolicy(ModelHindsight):
             },
         )
 
+        opt_params = cfg.experiments.optimization_parameters
+        self.constants.USE_CVAR = opt_params.get("use_cvar_constraint", False)
+        if self.constants.USE_CVAR:
+            self.constants.CVAR_ALPHA = opt_params.get("cvar_alpha", 0.95)
+            self.constants.CVAR_LIMIT = opt_params.get("cvar_limit", 0.0)
+
     def _set_variables(self):
         """Adds additional variables specific to the ModelSinglePolicy."""
         super()._set_variables()
@@ -279,6 +285,39 @@ class ModelSinglePolicy(ModelHindsight):
             coords={"feature": self.constants.FEATURE_DIM}
         )
 
+        if self.constants.USE_CVAR:
+            self.model.add_variables(name="VaR")
+            self.model.add_variables(
+                lower=0,
+                name="xi",
+                dims=["datetime"],
+                coords={"datetime": self.constants.T}
+            )
+
+    def _set_cvar_constraints(self):
+        """Adds CVaR constraint on balancing cost using Rockafellar-Uryasev form.
+
+        Enforces: VaR + 1/(T*(1-alpha)) * sum(xi) <= cvar_limit
+        where xi[t] >= (lambda_DA_hat[t] - lambda_B_hat[t]) * p_B[t] - VaR, xi[t] >= 0.
+        """
+        T = len(self.constants.T)
+        alpha = self.constants.CVAR_ALPHA
+        price_diff = self.parameters.lambda_DA_hat - self.parameters.lambda_B_hat
+
+        # xi[t] >= (lambda_DA_hat[t] - lambda_B_hat[t]) * p_B[t] - VaR
+        self.model.add_constraints(
+            self.model.variables["xi"] >= price_diff * self.model.variables["p_B"] - self.model.variables["VaR"],
+            name="cvar_xi"
+        )
+        # VaR + 1/(T*(1-alpha)) * sum(xi) <= cvar_limit  (Rockafellar-Uryasev)
+        self.model.add_constraints(
+            self.model.variables["VaR"]
+            + (1.0 / (T * (1.0 - alpha))) * self.model.variables["xi"].sum()
+            <= self.constants.CVAR_LIMIT,
+            name="cvar_limit"
+        )
+        logger.info(f"CVaR constraint added: alpha={alpha}, limit={self.constants.CVAR_LIMIT}")
+
     def _set_constraints(self):
         super()._set_constraints()
         X_T = self.parameters.X_features.transpose("feature", "datetime")
@@ -291,10 +330,20 @@ class ModelSinglePolicy(ModelHindsight):
             name="bid_adjustment"
         )
 
+        if self.constants.USE_CVAR:
+            self._set_cvar_constraints()
+
     def _save_results(self):
         super()._save_results()
         self.results.z = self.model.variables["z"].solution.to_pandas()
         self.results.q = self.model.variables["q"].solution.to_pandas()
+        if self.constants.USE_CVAR:
+            self.results.VaR = self.model.variables["VaR"].solution.item()
+            self.results.xi = self.model.variables["xi"].solution.to_pandas()
+            alpha = self.constants.CVAR_ALPHA
+            T = len(self.constants.T)
+            self.results.CVaR = self.results.VaR + (1.0 / (T * (1.0 - alpha))) * self.results.xi.sum()
+            logger.info(f"CVaR solution: VaR={self.results.VaR:.4f}, CVaR={self.results.CVaR:.4f}")
 
     def calculate_bids(self, cfg, data_df: pd.DataFrame, features: pd.DataFrame):
         """Calculate the DA bids and balancing/hydrogen bids using the trained policy."""

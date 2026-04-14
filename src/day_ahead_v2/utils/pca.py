@@ -98,7 +98,8 @@ def plot_decision_boundary(X_pca: pd.DataFrame,
                             y_magnitude: pd.Series = None,
                             save_path: Path = None,
                             uncertain_label: int = 0,
-                            label_mapping: dict = None) -> None:
+                            label_mapping: dict = None,
+                            show_colorbar: bool = True) -> None:
     """
     Visualize decision boundary in PCA-reduced feature space.
 
@@ -253,13 +254,14 @@ def plot_decision_boundary(X_pca: pd.DataFrame,
 
     if scatter_ref is None:
         return
-    cbar = plt.colorbar(
-        scatter_ref,
-        ax=ax,
-        ticks=cbar_ticks,
-    )
-    if cbar_labels is not None:
-        cbar.ax.set_yticklabels(cbar_labels)
+    if show_colorbar:
+        cbar = plt.colorbar(
+            scatter_ref,
+            ax=ax,
+            ticks=cbar_ticks,
+        )
+        if cbar_labels is not None:
+            cbar.ax.set_yticklabels(cbar_labels)
 
     # Custom legend - only show if misclassified points are displayed
     if show_misclassified:

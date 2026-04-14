@@ -16,4 +16,4 @@ hydra:
     level: WARNING
 
 results:
-  save_path: "reports/${experiments.experiment_name}/${models.model_name}/${datasets.dataset_name}/${experiments.optimization_parameters.model}/${experiments.optimization_parameters.cvar_limit}/"
+  save_path: "reports/${experiments.experiment_name}/${models.model_name}/${datasets.dataset_name}/${experiments.optimization_parameters.model}${cvar_path:${experiments.optimization_parameters.use_cvar_constraint},${experiments.optimization_parameters.cvar_limit}}/"
