@@ -52,6 +52,8 @@ dev = [
     "ruff==0.14.11",
     "mkdocstrings-python==2.0.2",
     "psutil>=7.2.2",
+    "fastapi>=0.135.3",
+    "uvicorn[standard]>=0.44.0",
 ]
 
 
