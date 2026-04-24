@@ -899,6 +899,7 @@ def main(cfg: DictConfig) -> None:
     if not save_path.is_absolute():
         save_path = Path(__file__).resolve().parent.parent.parent / save_path
     save_path.mkdir(parents=True, exist_ok=True)
+    OmegaConf.save(cfg, save_path / "config.yaml")
     results_df = pd.DataFrame(results)
     results_df.to_csv(save_path / "backtest_results.csv", index=False)
     logger.info(f"Results saved to {save_path / 'backtest_results.csv'}")

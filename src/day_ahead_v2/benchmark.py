@@ -16,6 +16,7 @@ import pandas as pd
 import hydra
 import logging
 import copy
+from omegaconf import OmegaConf
 from day_ahead_v2.optimization import ModelHindsight, ModelSinglePolicy
 from day_ahead_v2.data import PandasHandler
 from day_ahead_v2.train import rolling_windows, feature_selection, split_features_target
@@ -343,9 +344,14 @@ def main(cfg):
     total_profit_train_hindsight = all_train_results_dfs_hindsight["profit"].sum()
     mean_profit_train_hindsight = all_train_results_dfs_hindsight["profit"].mean()
     std_profit_train_hindsight = all_train_results_dfs_hindsight["profit"].std()
+    profit_train_hindsight = all_train_results_dfs_hindsight["profit"]
+    cvar95_train_hindsight = profit_train_hindsight[profit_train_hindsight <= np.percentile(profit_train_hindsight, 5)].mean()
     total_profit_test_hindsight = all_test_results_dfs_hindsight["profit"].sum()
     mean_profit_test_hindsight = all_test_results_dfs_hindsight["profit"].mean()
     std_profit_test_hindsight = all_test_results_dfs_hindsight["profit"].std()
+    profit_test_hindsight = all_test_results_dfs_hindsight["profit"]
+    cvar95_test_hindsight = profit_test_hindsight[profit_test_hindsight <= np.percentile(profit_test_hindsight, 5)].mean()
+
     total_profit_train_policy = all_train_results_dfs_policy["profit"].sum()
     mean_profit_train_policy = all_train_results_dfs_policy["profit"].mean()
     std_profit_train_policy = all_train_results_dfs_policy["profit"].std()
@@ -356,6 +362,7 @@ def main(cfg):
     std_profit_test_policy = all_test_results_dfs_policy["profit"].std()
     profit_test_policy = all_test_results_dfs_policy["profit"]
     cvar95_test_policy = profit_test_policy[profit_test_policy <= np.percentile(profit_test_policy, 5)].mean()
+
     total_profit_train_bid_forecast = all_train_results_dfs_bid_forecast["profit"].sum()
     mean_profit_train_bid_forecast = all_train_results_dfs_bid_forecast["profit"].mean()
     std_profit_train_bid_forecast = all_train_results_dfs_bid_forecast["profit"].std()
@@ -370,8 +377,10 @@ def main(cfg):
     avg_metrics_hindsight = {
         "train_profit_total": total_profit_train_hindsight,
         "train_profit_mean": f"{mean_profit_train_hindsight:.2f} ± {std_profit_train_hindsight:.2f}",
+        "train_profit_cvar": cvar95_train_hindsight,
         "test_profit_total": total_profit_test_hindsight,
         "test_profit_mean": f"{mean_profit_test_hindsight:.2f} ± {std_profit_test_hindsight:.2f}",
+        "test_profit_cvar": cvar95_test_hindsight,
     }
     avg_metrics_policy = {
         "train_profit_total": total_profit_train_policy,
@@ -398,6 +407,7 @@ def main(cfg):
     save_path = Path(__file__).resolve().parent.parent.parent / "reports" / cfg.experiments.experiment_name
     save_path_hindsight = save_path / "hindsight" / cfg.datasets.dataset_name
     save_path_hindsight.mkdir(parents=True, exist_ok=True)
+    OmegaConf.save(cfg, save_path_hindsight / "config.yaml")
     results_hindsight_df.to_csv(save_path_hindsight / "backtest_results.csv", index=False)
     with open(save_path_hindsight / "allwindows_metrics.txt", "w") as f:
             for key, value in avg_metrics_hindsight.items():
@@ -405,6 +415,7 @@ def main(cfg):
 
     save_path_policy = save_path / "single_policy" / cfg.datasets.dataset_name
     save_path_policy.mkdir(parents=True, exist_ok=True)
+    OmegaConf.save(cfg, save_path_policy / "config.yaml")
     results_policy_df.to_csv(save_path_policy / "backtest_results.csv", index=False)
     with open(save_path_policy / "allwindows_metrics.txt", "w") as f:
             for key, value in avg_metrics_policy.items():
@@ -412,6 +423,7 @@ def main(cfg):
 
     save_path_bid_forecast = save_path / "bid_forecast" / cfg.datasets.dataset_name
     save_path_bid_forecast.mkdir(parents=True, exist_ok=True)
+    OmegaConf.save(cfg, save_path_bid_forecast / "config.yaml")
     results_bid_forecast_df.to_csv(save_path_bid_forecast / "backtest_results.csv", index=False)
     with open(save_path_bid_forecast / "allwindows_metrics.txt", "w") as f:
             for key, value in avg_metrics_bid_forecast.items():

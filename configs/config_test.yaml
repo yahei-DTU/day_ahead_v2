@@ -1,6 +1,6 @@
 defaults:
   - datasets: data2025
-  - models: lightgbm
+  - models: logistic_regression
   - experiments: 2025_test
   - _self_
 
