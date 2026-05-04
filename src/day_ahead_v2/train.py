@@ -22,6 +22,7 @@ import os
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
+import sys
 import logging
 import random
 import hydra
@@ -41,7 +42,7 @@ import lightgbm as lgb
 import shap
 from day_ahead_v2.data import PandasHandler, DataHandler
 from day_ahead_v2.optimization import ModelClassPolicy, ModelAllOrNothing
-from day_ahead_v2.evaluate import evaluate_classifier, compute_accuracy_f1, threshold_predictions, calculate_profit
+from day_ahead_v2.evaluate import evaluate_classifier, compute_accuracy_f1, threshold_predictions, calculate_profit, cvar_profit, mean_profit
 from day_ahead_v2.utils.sanitize_names import sanitize_column_names
 from day_ahead_v2.utils import electrolyzer_efficiency
 
@@ -461,8 +462,7 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
     alphas = cfg.experiments.experiment_parameters.get("decision_threshold_alphas", [0.5])
 
     best_alpha = None
-    best_profit = -np.inf
-    best_mean_profit = -np.inf
+    best_metric_profit = -np.inf
     logger.info(f"Best model classes: {best_model.classes_}")
     for alpha in alphas:
         threshold_preds_df_train = threshold_predictions(cfg, best_train_results_df.filter(like="proba_class_").to_numpy(), alpha)
@@ -507,7 +507,7 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
         )
         optimizer.build_model()
         # Save LP file for debugging
-        root = Path(__file__).resolve().parent.parent.parent
+        root = Path(cfg.project_root)
         save_path = root / "models" / "lp_files" / f"model_alpha{alpha}.lp"
         save_path.parent.mkdir(parents=True, exist_ok=True)
         optimizer.model.to_file(save_path)
@@ -547,16 +547,15 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
         lambda_DA_hat_val = data_optimization[cfg.datasets.optimization.lambda_DA_hat]
         lambda_B_hat_val = data_optimization[cfg.datasets.optimization.lambda_B_hat]
         profit_val = calculate_profit(p_DA_val, h_val, p_B_val, lambda_DA_hat_val, cfg.experiments.optimization_parameters.hydrogen_price, lambda_B_hat_val)
-        mean_profit_val = profit_val.mean()
-        logger.info(f"Alpha {alpha} → Mean profit on validation set: {mean_profit_val:.2f}, Total profit: {profit_val.sum():.2f}")
+        metric_name = cfg.experiments.experiment_parameters.get('threshold_alpha_tuning', 'mean_profit')
+        profit_metric_val = getattr(sys.modules[__name__], metric_name)(profit_val)
+        logger.info(f"Alpha {alpha} → {metric_name} on validation set: {profit_metric_val:.2f}")
 
-
-        if mean_profit_val > best_mean_profit:
-            best_mean_profit = mean_profit_val
-            best_profit = profit_val
+        if profit_metric_val > best_metric_profit:
+            best_metric_profit = profit_metric_val
             best_alpha = alpha
 
-    logger.info(f"Best decision threshold alpha: {best_alpha} with mean profit: {best_mean_profit} and total profit: {best_profit}")
+    logger.info(f"Best decision threshold alpha: {best_alpha} with {cfg.experiments.experiment_parameters.get('threshold_alpha_tuning', 'mean_profit')}={best_metric_profit:.2f} on validation set")
 
     # ---------------------------------------------
     # Retrain on train + validation
@@ -895,9 +894,10 @@ def main(cfg: DictConfig) -> None:
 
     # Save results to CSV
     OmegaConf.resolve(cfg)
+    project_root = Path(cfg.project_root)
     save_path = Path(cfg.results.save_path)
     if not save_path.is_absolute():
-        save_path = Path(__file__).resolve().parent.parent.parent / save_path
+        save_path = project_root / save_path
     save_path.mkdir(parents=True, exist_ok=True)
     OmegaConf.save(cfg, save_path / "config.yaml")
     results_df = pd.DataFrame(results)

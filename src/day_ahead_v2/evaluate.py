@@ -294,3 +294,18 @@ def calculate_profit(p_DA: pd.Series, h: pd.Series, p_B: pd.Series, lambda_DA_ha
         logger.error(f"{profit.isna().sum()} profit values are NaN. Check calculate_profit method.")
         profit.fillna(0, inplace=True)
     return profit
+
+def mean_profit(profit: pd.Series) -> float:
+    return profit.mean()
+
+def cvar_profit(profit: pd.Series, alpha: float = 0.05) -> float:
+    """
+    Calculate CVaR (Conditional Value at Risk) of the profit distribution at the given alpha level.
+    CVaR is the expected profit in the worst alpha% of cases.
+    """
+    if profit.isna().any():
+        logger.error("Profit series contains NaN values. Check cvar_profit method.")
+        profit = profit.dropna()
+    var_threshold = np.percentile(profit, alpha * 100)
+    cvar = profit[profit <= var_threshold].mean()
+    return cvar

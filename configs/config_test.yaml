@@ -1,9 +1,10 @@
 defaults:
   - datasets: data2025
   - models: logistic_regression
-  - experiments: 2025_test
+  - experiments: alpha_tuning_exp2
   - _self_
 
+project_root: "${hydra:runtime.cwd}"
 seed: 42
 
 hydra:
@@ -16,4 +17,4 @@ hydra:
     level: INFO
 
 results:
-  save_path: "reports/${experiments.experiment_name}/${models.model_name}/${datasets.dataset_name}/${experiments.optimization_parameters.model}${cvar_path:${experiments.optimization_parameters.use_cvar_constraint},${experiments.optimization_parameters.cvar_limit}}/"
+  save_path: "reports/${experiments.experiment_name}/${models.model_name}/${datasets.dataset_name}/"

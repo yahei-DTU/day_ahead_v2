@@ -404,7 +404,9 @@ def main(cfg):
     results_bid_forecast_df = pd.DataFrame(all_results_bid_forecast)
 
     # Save results to CSV
-    save_path = Path(__file__).resolve().parent.parent.parent / "reports" / cfg.experiments.experiment_name
+    project_root = Path(cfg.project_root)
+    save_path = project_root / "reports" / cfg.experiments.experiment_name
+
     save_path_hindsight = save_path / "hindsight" / cfg.datasets.dataset_name
     save_path_hindsight.mkdir(parents=True, exist_ok=True)
     OmegaConf.save(cfg, save_path_hindsight / "config.yaml")

@@ -15,6 +15,7 @@ experiment_parameters:
   start_date: "2025-04-01" # Start date for training
   end_date: "2026-01-31" # End date for testing 2026-01-31
   decision_threshold_alphas: [0.7] # Thresholds to be tuned for converting probabilities to class labels
+  threshold_alpha_tuning: mean_profit # Metric to use for tuning the decision threshold (e.g., "mean_profit", "cvar_profit")
 
 # Optimization parameters
 optimization_parameters:
