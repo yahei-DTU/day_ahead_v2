@@ -1,5 +1,5 @@
 # Experiment configuration for Exp1
-experiment_name: "2025_test" # Name of the experiment
+experiment_name: "template_test" # Name of the experiment
 
 # Train parameters
 train_parameters:

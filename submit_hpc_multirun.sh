@@ -10,8 +10,10 @@
 #BSUB -o hpc_output/multirun_%J_%I.out
 #BSUB -e hpc_output/multirun_%J_%I.err
 
-MODELS=(logistic_regression lightgbm xgboost mlp)
-MODEL=${MODELS[$((LSB_JOBINDEX - 1))]}
+# MODELS=(logistic_regression lightgbm xgboost mlp)
+# MODEL=${MODELS[$((LSB_JOBINDEX - 1))]}
+EXPERIMENTS=(alpha_tuning_exp1 alpha_tuning_exp2 alpha_tuning_exp3 alpha_tuning_exp4)
+EXPERIMENT=${EXPERIMENTS[$((LSB_JOBINDEX - 1))]}
 
 mkdir -p hpc_output
 cd /zhome/25/9/211757/day_ahead_v2
@@ -21,4 +23,4 @@ export PATH="$HOME/.local/bin:$PATH"   # so uv is found
 uv sync
 source .venv/bin/activate
 
-python -m day_ahead_v2.train --config-name=config_prod "models=${MODEL}"
+python -m day_ahead_v2.train --config-name=config_prod "experiments=${EXPERIMENT}"

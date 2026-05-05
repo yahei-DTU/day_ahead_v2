@@ -249,7 +249,9 @@ class ModelSinglePolicy(ModelHindsight):
         if "predicted_proba" in X_features.columns:
             X_features["predicted_proba"] = X_features["predicted_proba"].clip(lower=1e-3, upper=1 - 1e-3)
         X_features["intercept"] = 1.0
-        X_features["lambda_DA_hat"] = lambda_DA_hat
+        self._lambda_DA_mean = float(lambda_DA_hat.mean())
+        self._lambda_DA_std = max(float(lambda_DA_hat.std()), 1e-8)
+        X_features["lambda_DA_hat"] = (lambda_DA_hat - self._lambda_DA_mean) / self._lambda_DA_std
         # Zero out near-zero values so they are dropped from the sparse LP matrix,
         # preventing extreme coefficient ranges from z-scored features near their mean.
         X_features = X_features.where(X_features.abs() >= 1e-4, other=0.0)
@@ -378,9 +380,10 @@ class ModelSinglePolicy(ModelHindsight):
                 if bid_lambda_DA[k] > lambda_DA_hat.loc[t]:
                     p_DA.loc[t] = bid_p_DA.loc[t, k - lambda_step]
                     break
+                k_norm = (bid_lambda_DA[k] - self._lambda_DA_mean) / self._lambda_DA_std
                 bid_p_DA.loc[t, k] = np.maximum(
                     np.minimum(
-                        P_W_tilde.loc[t] + a_DA * bid_lambda_DA[k] + b_DA,
+                        P_W_tilde.loc[t] + a_DA * k_norm + b_DA,
                         cfg.experiments.optimization_parameters.wind_capacity,
                     ),
                     -cfg.experiments.optimization_parameters.electrolyzer_capacity,
@@ -423,7 +426,9 @@ class ModelClassPolicy(ModelHindsight):
         if "predicted_proba" in X_features.columns:
             X_features["predicted_proba"] = X_features["predicted_proba"].clip(lower=1e-3, upper=1 - 1e-3)
         X_features["intercept"] = 1.0
-        X_features["lambda_DA_hat"] = lambda_DA_hat
+        self._lambda_DA_mean = float(lambda_DA_hat.mean())
+        self._lambda_DA_std = max(float(lambda_DA_hat.std()), 1e-8)
+        X_features["lambda_DA_hat"] = (lambda_DA_hat - self._lambda_DA_mean) / self._lambda_DA_std
         # Zero out near-zero values so they are dropped from the sparse LP matrix,
         # preventing extreme coefficient ranges from z-scored features near their mean.
         X_features = X_features.where(X_features.abs() >= 1e-4, other=0.0)
@@ -616,9 +621,10 @@ class ModelClassPolicy(ModelHindsight):
                     p_DA.loc[t] = bid_p_DA.loc[t, k - lambda_step]
                     break
 
+                k_norm = (bid_lambda_DA[k] - self._lambda_DA_mean) / self._lambda_DA_std
                 bid_p_DA.loc[t, k] = np.maximum(
                     np.minimum(
-                        P_W_tilde.loc[t] + a_DA * bid_lambda_DA[k] + b_DA,
+                        P_W_tilde.loc[t] + a_DA * k_norm + b_DA,
                         cfg.experiments.optimization_parameters.wind_capacity,
                     ),
                     -cfg.experiments.optimization_parameters.electrolyzer_capacity,
