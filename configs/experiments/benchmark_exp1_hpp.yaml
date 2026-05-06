@@ -1,12 +1,12 @@
 # Experiment configuration for Exp1
-experiment_name: "alpha_80" # Name of the experiment
+experiment_name: "benchmark_exp1_hpp" # Name of the experiment
 
 # Train parameters
 train_parameters:
   train_length: 120 # Days of training
   valid_length: 30 # Days of validation
   test_length: 7 # Days of testing
-  n_jobs: 1 # or -1 for all cores
+  n_jobs: 5 # or -1 for all cores
   feature_selection: true # Whether to perform feature selection
   sample_weighting: true # Whether to weight training samples by abs(lambda_DA_hat - lambda_B_hat)
 
@@ -14,11 +14,12 @@ train_parameters:
 experiment_parameters:
   start_date: "2025-04-01" # Start date for training
   end_date: "2026-01-31" # End date for testing 2026-01-31
-  decision_threshold_alphas: [0.8] # Thresholds to be tuned for converting probabilities to class labels
+  decision_threshold_alphas: [0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95] # Thresholds to be tuned for converting probabilities to class labels
   threshold_alpha_tuning: mean_profit # Metric to use for tuning the decision threshold (e.g., "mean_profit", "cvar_profit")
 
 # Optimization parameters
 optimization_parameters:
+  portfolio: "hpp" # Portfolio configuration (e.g., "wind_only", "hpp")
   model: class_policy # Optimization model to use (e.g., "class_policy", "all_or_nothing")
   electrolyzer_capacity: 3.6 # MW, set to 0 to disable electrolyzer
   wind_capacity: 7.2 # MW

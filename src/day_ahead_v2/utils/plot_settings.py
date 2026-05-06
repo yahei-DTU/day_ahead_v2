@@ -24,11 +24,11 @@ def apply_plot_settings():
     x_length = 10
     golden_ratio = (1 + 5 ** 0.5) / 2
     plt.rcParams['figure.figsize'] = (x_length, x_length / golden_ratio)
-    plt.rcParams['font.size'] = 14
-    plt.rcParams['axes.titlesize'] = 14
-    plt.rcParams['axes.labelsize'] = 14
-    plt.rcParams['xtick.labelsize'] = 14
-    plt.rcParams['ytick.labelsize'] = 14
+    plt.rcParams['font.size'] = 12
+    plt.rcParams['axes.titlesize'] = 12
+    plt.rcParams['axes.labelsize'] = 12
+    plt.rcParams['xtick.labelsize'] = 12
+    plt.rcParams['ytick.labelsize'] = 12
 
 # Color palettes
 color_palette_1 = {

@@ -20,6 +20,7 @@ experiment_parameters:
 
 # Optimization parameters
 optimization_parameters:
+  portfolio: "hpp" # Portfolio configuration (e.g., "wind_only", "hpp")
   model: class_policy # Optimization model to use (e.g., "class_policy", "all_or_nothing")
   electrolyzer_capacity: 3.6 # MW, set to 0 to disable electrolyzer
   wind_capacity: 7.2 # MW

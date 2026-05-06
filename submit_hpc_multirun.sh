@@ -1,7 +1,7 @@
 #!/bin/bash
 #BSUB -q hpc
-#BSUB -J multirun[1-4]
-#BSUB -n 8
+#BSUB -J multirun[1-10]
+#BSUB -n 20
 #BSUB -W 20:00
 #BSUB -u yahei@dtu.dk
 #BSUB -R "rusage[mem=2048MB]"
@@ -12,7 +12,7 @@
 
 # MODELS=(logistic_regression lightgbm xgboost mlp)
 # MODEL=${MODELS[$((LSB_JOBINDEX - 1))]}
-EXPERIMENTS=(alpha_tuning_exp1 alpha_tuning_exp2 alpha_tuning_exp3 alpha_tuning_exp4)
+EXPERIMENTS=(alpha50_CVaR50_hpp alpha60_CVaR50_hpp alpha70_CVaR50_hpp alpha80_CVaR50_hpp alpha90_CVaR50_hpp alpha50_CVaR100_hpp alpha60_CVaR100_hpp alpha70_CVaR100_hpp alpha80_CVaR100_hpp alpha90_CVaR100_hpp)
 EXPERIMENT=${EXPERIMENTS[$((LSB_JOBINDEX - 1))]}
 
 mkdir -p hpc_output

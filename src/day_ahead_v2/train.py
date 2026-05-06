@@ -41,7 +41,17 @@ from sklearn.feature_selection import VarianceThreshold
 import lightgbm as lgb
 import shap
 from day_ahead_v2.data import PandasHandler, DataHandler
-from day_ahead_v2.optimization import ModelClassPolicy, ModelAllOrNothing
+from day_ahead_v2.optimization import (
+    ModelClassPolicyHPP, ModelAllOrNothingHPP,
+    ModelClassPolicyWindOnly, ModelAllOrNothingWindOnly,
+)
+
+_OPTIMIZER_CLASSES = {
+    ("class_policy",   "hpp"):       ModelClassPolicyHPP,
+    ("all_or_nothing", "hpp"):       ModelAllOrNothingHPP,
+    ("class_policy",   "wind_only"): ModelClassPolicyWindOnly,
+    ("all_or_nothing", "wind_only"): ModelAllOrNothingWindOnly,
+}
 from day_ahead_v2.evaluate import evaluate_classifier, compute_accuracy_f1, threshold_predictions, calculate_profit, cvar_profit, mean_profit
 from day_ahead_v2.utils.sanitize_names import sanitize_column_names
 from day_ahead_v2.utils import electrolyzer_efficiency
@@ -459,6 +469,9 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
     # ---------------------------------------------
     # Decision threshold tuning (on validation)
     # --------------------------------------------
+    portfolio = cfg.experiments.optimization_parameters.portfolio
+    is_hpp = portfolio == "hpp"
+
     alphas = cfg.experiments.experiment_parameters.get("decision_threshold_alphas", [0.5])
 
     best_alpha = None
@@ -495,7 +508,7 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
         lambda_B_hat = data_optimization[cfg.datasets.optimization.lambda_B_hat]
         P_W_hat = data_optimization[cfg.datasets.optimization.P_W_hat]
         P_W_tilde = data_optimization[cfg.datasets.optimization.P_W_tilde]
-        optimizer_cls = {"class_policy": ModelClassPolicy, "all_or_nothing": ModelAllOrNothing}[cfg.experiments.optimization_parameters.model]
+        optimizer_cls = _OPTIMIZER_CLASSES[(cfg.experiments.optimization_parameters.model, portfolio)]
         optimizer = optimizer_cls(
             cfg = cfg,
             lambda_DA_hat = lambda_DA_hat,
@@ -509,8 +522,11 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
         # Save LP file for debugging
         root = Path(cfg.project_root)
         save_path = root / "models" / "lp_files" / f"model_alpha{alpha}.lp"
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        optimizer.model.to_file(save_path)
+        try:
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            optimizer.model.to_file(save_path)
+        except OSError as e:
+            logger.warning(f"Could not save LP file to {save_path}: {e}")
         try:
             optimizer.run_optimization()
         except Exception as e:
@@ -543,10 +559,13 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
         datetime_index = X_.index
         data_optimization = data_handler.data.loc[datetime_index]
         X_features = pd.concat([X_val.loc[datetime_index], X_.loc[datetime_index][["predicted_proba"]]], axis=1)
-        p_DA_val, p_B_val, p_H_val, h_val = optimizer.calculate_bids(cfg, data_optimization, X_features, threshold_preds_df_val)
+        val_bids = optimizer.calculate_bids(cfg, data_optimization, X_features, threshold_preds_df_val)
+        p_DA_val, p_B_val = val_bids[0], val_bids[1]
+        h_val = val_bids[3] if is_hpp else pd.Series(0.0, index=p_DA_val.index)
         lambda_DA_hat_val = data_optimization[cfg.datasets.optimization.lambda_DA_hat]
         lambda_B_hat_val = data_optimization[cfg.datasets.optimization.lambda_B_hat]
-        profit_val = calculate_profit(p_DA_val, h_val, p_B_val, lambda_DA_hat_val, cfg.experiments.optimization_parameters.hydrogen_price, lambda_B_hat_val)
+        h2_price = cfg.experiments.optimization_parameters.hydrogen_price if is_hpp else 0.0
+        profit_val = calculate_profit(p_DA_val, h_val, p_B_val, lambda_DA_hat_val, h2_price, lambda_B_hat_val)
         metric_name = cfg.experiments.experiment_parameters.get('threshold_alpha_tuning', 'mean_profit')
         profit_metric_val = getattr(sys.modules[__name__], metric_name)(profit_val)
         logger.info(f"Alpha {alpha} → {metric_name} on validation set: {profit_metric_val:.2f}")
@@ -585,7 +604,7 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
     test_metrics, test_results_df = evaluate_classifier(final_model, X_test, y_test, fallback_class=cfg.datasets.training.fallback_class)
     logger.info(f"Test metrics: {test_metrics}")
 
-    if not alpha:
+    if best_alpha is None:
         logger.error("No alpha exists. Check optimization.")
         metrics_threshold_prediction_train = {}
         metrics_threshold_prediction_test = {}
@@ -642,7 +661,7 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
     lambda_B_hat = data_train[cfg.datasets.optimization.lambda_B_hat]
     P_W_hat = data_train[cfg.datasets.optimization.P_W_hat]
     P_W_tilde = data_train[cfg.datasets.optimization.P_W_tilde]
-    optimizer_cls = {"class_policy": ModelClassPolicy, "all_or_nothing": ModelAllOrNothing}[cfg.experiments.optimization_parameters.model]
+    optimizer_cls = _OPTIMIZER_CLASSES[(cfg.experiments.optimization_parameters.model, portfolio)]
     optimizer_final = optimizer_cls(
         cfg = cfg,
         lambda_DA_hat = lambda_DA_hat,
@@ -654,10 +673,13 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
     )
     optimizer_final.build_model()
     # Save LP file for debugging
-    root = Path(__file__).resolve().parent.parent.parent
+    root = Path(cfg.project_root)
     save_path = root / "models" / "lp_files" / f"model_alpha{alpha}.lp"
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    optimizer_final.model.to_file(save_path)
+    try:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        optimizer_final.model.to_file(save_path)
+    except OSError as e:
+        logger.warning(f"Could not save LP file to {save_path}: {e}")
     try:
         optimizer_final.run_optimization()
     except Exception as e:
@@ -668,23 +690,27 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
             f"Final optimization did not converge for training data in window {window}. Status: {optimizer_final.results.status}"
         )
     p_DA_train = optimizer_final.results.p_DA
-    p_H_train = optimizer_final.results.p_H
-    h_train = optimizer_final.results.h
     p_B_train = optimizer_final.results.p_B
+    p_H_train = optimizer_final.results.p_H if is_hpp else pd.Series(0.0, index=p_DA_train.index)
+    h_train = optimizer_final.results.h if is_hpp else pd.Series(0.0, index=p_DA_train.index)
 
     if final_rare_labels:
         final_preds_test_df.loc[final_preds_test_df["thresholded_label"].isin(final_rare_labels), "thresholded_label"] = cfg.datasets.training.fallback_class
         logger.info(f"Final test: reassigned rare labels {final_rare_labels} to fallback_class to match final training.")
     X_features = pd.concat([X_test.loc[datetime_index_test], final_preds_test_df.loc[datetime_index_test][["predicted_proba"]]], axis=1)
-    p_DA_test, p_B_test, p_H_test, h_test = optimizer_final.calculate_bids(cfg, data_test, X_features, final_preds_test_df)
+    test_bids = optimizer_final.calculate_bids(cfg, data_test, X_features, final_preds_test_df)
+    p_DA_test, p_B_test = test_bids[0], test_bids[1]
+    p_H_test = test_bids[2] if is_hpp else pd.Series(0.0, index=p_DA_test.index)
+    h_test = test_bids[3] if is_hpp else pd.Series(0.0, index=p_DA_test.index)
 
     # Calculate profit for train and test sets
     lambda_DA_hat_train = data_train[cfg.datasets.optimization.lambda_DA_hat]
     lambda_B_hat_train = data_train[cfg.datasets.optimization.lambda_B_hat]
-    profit_train = calculate_profit(p_DA_train, h_train, p_B_train, lambda_DA_hat_train, cfg.experiments.optimization_parameters.hydrogen_price, lambda_B_hat_train)
+    h2_price = cfg.experiments.optimization_parameters.hydrogen_price if is_hpp else 0.0
+    profit_train = calculate_profit(p_DA_train, h_train, p_B_train, lambda_DA_hat_train, h2_price, lambda_B_hat_train)
     lambda_DA_hat_test = data_test[cfg.datasets.optimization.lambda_DA_hat]
     lambda_B_hat_test = data_test[cfg.datasets.optimization.lambda_B_hat]
-    profit_test = calculate_profit(p_DA_test, h_test, p_B_test, lambda_DA_hat_test, cfg.experiments.optimization_parameters.hydrogen_price, lambda_B_hat_test)
+    profit_test = calculate_profit(p_DA_test, h_test, p_B_test, lambda_DA_hat_test, h2_price, lambda_B_hat_test)
     # Add bids and profit to results dfs
     train_results_df["p_DA"] = p_DA_train
     train_results_df["p_B"] = p_B_train
@@ -747,9 +773,10 @@ def run_backtest(cfg: DictConfig) -> list:
                                         )
 
     # ----------------------------------------------
-    # Initialize the electrolyzer
+    # Initialize the electrolyzer (HPP only)
     # ----------------------------------------------
-    electrolyzer_efficiency.initiate_HYP_L(cfg)
+    if cfg.experiments.optimization_parameters.portfolio == "hpp":
+        electrolyzer_efficiency.initiate_HYP_L(cfg)
 
     windows = list(rolling_windows(cfg))
     logger.info(f"Running backtest over {len(windows)} windows...")
