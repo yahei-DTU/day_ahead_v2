@@ -1,0 +1,39 @@
+# Experiment configuration for Exp1
+experiment_name: "alpha65_CVaR50_hpp" # Name of the experiment
+
+# Train parameters
+train_parameters:
+  train_length: 120 # Days of training
+  valid_length: 30 # Days of validation
+  test_length: 7 # Days of testing
+  n_jobs: 1 # or -1 for all cores
+  feature_selection: true # Whether to perform feature selection
+  sample_weighting: true # Whether to weight training samples by abs(lambda_DA_hat - lambda_B_hat)
+
+# Model parameters
+experiment_parameters:
+  start_date: "2025-04-01" # Start date for training
+  end_date: "2026-01-31" # End date for testing 2026-01-31
+  decision_threshold_alphas: [0.65] # Thresholds to be tuned for converting probabilities to class labels
+  threshold_alpha_tuning: mean_profit # Metric to use for tuning the decision threshold (e.g., "mean_profit", "cvar_profit")
+
+
+# Optimization parameters
+optimization_parameters:
+  portfolio: "hpp" # Portfolio configuration (e.g., "wind_only", "hpp")
+  model: class_policy # Optimization model to use (e.g., "class_policy", "all_or_nothing")
+  electrolyzer_capacity: 3.6 # MW, set to 0 to disable electrolyzer
+  wind_capacity: 7.2 # MW
+  hydrogen_price: 2.0 # EUR/kg
+  electrolyzer_load_min: 0.1 # Minimum load factor for the electrolyzer (10% of capacity)
+  number_of_segments: 2 # Number of linear segments for the hydrogen production function
+  a: [] # Linear segments of hydrogen production function (kg/MWh)
+  b: []
+  minimum_daily_hydrogen: 100 # Minimum daily hydrogen production requirement (kg)
+  use_cvar_constraint: true # Whether to add a CVaR constraint on balancing cost
+  cvar_alpha: 0.95 # Confidence level for CVaR
+  cvar_limit: 50 # Upper bound on CVaR of (lambda_DA_hat - lambda_B_hat)*p_B
+
+feature_selection_parameters:
+  shap_cumulative_importance_threshold: 0.9 # Threshold for cumulative importance in SHAP feature selection
+  plot_shap_importance: true # Whether to plot SHAP feature importance
