@@ -1,8 +1,7 @@
 defaults:
   - datasets: data2025
-  - models: logistic_regression
-  - experiments: alpha_tuning_exp2
-  - _self_
+  - models: lightgbm
+  - experiments: benchmark_exp1_windonly
 
 project_root: "${hydra:runtime.cwd}"
 seed: 42

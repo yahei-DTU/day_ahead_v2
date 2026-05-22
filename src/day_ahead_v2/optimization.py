@@ -803,6 +803,8 @@ class ModelSinglePolicyWindOnly(ModelHindsightWindOnly):
     def _set_variables(self):
         super()._set_variables()
         self.model.add_variables(
+            lower=-self.parameters.P_W_tilde,
+            upper=self.constants.P_W_BAR - self.parameters.P_W_tilde,
             name="z",
             dims=["datetime"],
             coords={"datetime": self.constants.T}

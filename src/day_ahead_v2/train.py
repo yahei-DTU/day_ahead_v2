@@ -45,6 +45,9 @@ from day_ahead_v2.optimization import (
     ModelClassPolicyHPP, ModelAllOrNothingHPP,
     ModelClassPolicyWindOnly, ModelAllOrNothingWindOnly,
 )
+from day_ahead_v2.evaluate import evaluate_classifier, compute_accuracy_f1, threshold_predictions, calculate_profit, cvar_profit, mean_profit
+from day_ahead_v2.utils.sanitize_names import sanitize_column_names
+from day_ahead_v2.utils import electrolyzer_efficiency
 
 _OPTIMIZER_CLASSES = {
     ("class_policy",   "hpp"):       ModelClassPolicyHPP,
@@ -52,10 +55,6 @@ _OPTIMIZER_CLASSES = {
     ("class_policy",   "wind_only"): ModelClassPolicyWindOnly,
     ("all_or_nothing", "wind_only"): ModelAllOrNothingWindOnly,
 }
-from day_ahead_v2.evaluate import evaluate_classifier, compute_accuracy_f1, threshold_predictions, calculate_profit, cvar_profit, mean_profit
-from day_ahead_v2.utils.sanitize_names import sanitize_column_names
-from day_ahead_v2.utils import electrolyzer_efficiency
-
 
 logger = logging.getLogger(__name__)
 

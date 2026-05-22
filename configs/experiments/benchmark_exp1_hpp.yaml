@@ -31,7 +31,7 @@ optimization_parameters:
   minimum_daily_hydrogen: 100 # Minimum daily hydrogen production requirement (kg)
   use_cvar_constraint: true # Whether to add a CVaR constraint on balancing cost
   cvar_alpha: 0.95 # Confidence level for CVaR
-  cvar_limit: 1e2 # Upper bound on CVaR of (lambda_DA_hat - lambda_B_hat)*p_B
+  cvar_limit: 292.77 # Upper bound on CVaR of (lambda_DA_hat - lambda_B_hat)*p_B
 
 feature_selection_parameters:
   shap_cumulative_importance_threshold: 0.9 # Threshold for cumulative importance in SHAP feature selection

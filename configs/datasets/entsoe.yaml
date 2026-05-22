@@ -8,13 +8,14 @@ validation:
     duplicate_warn_pct: 1.0
     duplicate_fail_pct: 5.0
 
-start_date: "2025-01-01T00:00:00Z"
+start_date: "2023-01-01T00:00:00Z"
 end_date: "2026-03-02T00:00:00Z"
 savepath: "data/raw/entsoe/"
 BZN: DK_1
-include_neighbours: true # whether to pull data from the neighbouring countries as well (except crossborder data)
+include_neighbours: false # whether to pull data from the neighbouring countries as well (except crossborder data)
 
 queries:
+  generation:
   # contracted_reserve_prices_procured_capacity:
   #   process_type: A51 # A51: aFRR, A47: mFRR, A52: FCR
   #   type_marketagreement_type: A01  # A01: Day-ahead,
@@ -22,7 +23,7 @@ queries:
   # net_position:
   # imbalance_prices:
   # wind_and_solar_forecast:
-  load_and_forecast:
+  # load_and_forecast:
   # generation_forecast:
   # day_ahead_prices:
   # crossborder_flows:

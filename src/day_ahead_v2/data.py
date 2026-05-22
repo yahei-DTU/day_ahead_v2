@@ -1178,4 +1178,4 @@ def pull_energinet(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    pull_openmeteo()
+    pull_entsoe()
