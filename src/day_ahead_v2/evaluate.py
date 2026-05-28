@@ -295,9 +295,6 @@ def calculate_profit(p_DA: pd.Series, h: pd.Series, p_B: pd.Series, lambda_DA_ha
         profit.fillna(0, inplace=True)
     return profit
 
-def mean_profit(profit: pd.Series) -> float:
-    return profit.mean()
-
 def cvar_profit(profit: pd.Series, alpha: float = 0.05) -> float:
     """
     Calculate CVaR (Conditional Value at Risk) of the profit distribution at the given alpha level.

@@ -45,7 +45,7 @@ from day_ahead_v2.optimization import (
     ModelClassPolicyHPP, ModelAllOrNothingHPP,
     ModelClassPolicyWindOnly, ModelAllOrNothingWindOnly,
 )
-from day_ahead_v2.evaluate import evaluate_classifier, compute_accuracy_f1, threshold_predictions, calculate_profit, cvar_profit, mean_profit
+from day_ahead_v2.evaluate import evaluate_classifier, compute_accuracy_f1, threshold_predictions, calculate_profit, cvar_profit
 from day_ahead_v2.utils.sanitize_names import sanitize_column_names
 from day_ahead_v2.utils import electrolyzer_efficiency
 
@@ -211,18 +211,20 @@ def feature_selection(cfg: DictConfig, data: pd.DataFrame, start: datetime, end:
     logger.info(f"Initial number of features: {X_train.shape[1]}")
 
     # Variance threshold
-    vt = VarianceThreshold(threshold=0.0)
+    vt = VarianceThreshold(threshold=0.01)
     _ = vt.fit_transform(X_train)
     selected_features_var = X_train.columns[vt.get_support()].tolist()
     logger.info(f"Selected {len(selected_features_var)} features after variance thresholding.")
     X_train = X_train[selected_features_var]
 
-    # LightGBM + SHAP values
+    # LightGBM + SHAP values — regularized for stable importance estimates, not peak accuracy
     lgb_model = lgb.LGBMClassifier(
         objective="binary",
         n_estimators=300,
         learning_rate=0.05,
-        num_leaves=31,
+        num_leaves=15,
+        min_child_samples=50,
+        reg_lambda=1.0,
         random_state=cfg.seed,
         n_jobs=-1,
     )
@@ -838,8 +840,7 @@ def run_backtest(cfg: DictConfig) -> list:
         mean_profit_train = all_train_results_dfs["profit"].mean()
         std_profit_train = all_train_results_dfs["profit"].std()
         profit_train = all_train_results_dfs["profit"]
-        var95_train = np.percentile(profit_train, 5)
-        cvar95_train = profit_train[profit_train <= var95_train].mean()
+        cvar95_train = cvar_profit(profit_train, 0.05)
         logger.info(f"Total profit over all train windows: {total_profit_train}")
         logger.info(f"Mean profit over all train windows: {mean_profit_train}")
         logger.info(f"CVaR 95% over all train windows: {cvar95_train}")
@@ -870,8 +871,7 @@ def run_backtest(cfg: DictConfig) -> list:
         mean_profit_test = all_test_results_dfs["profit"].mean()
         std_profit_test = all_test_results_dfs["profit"].std()
         profit_test = all_test_results_dfs["profit"]
-        var95_test = np.percentile(profit_test, 5)
-        cvar95_test = profit_test[profit_test <= var95_test].mean()
+        cvar95_test = cvar_profit(profit_test, 0.05)
         logger.info(f"Total profit over all test windows: {total_profit_test}")
         logger.info(f"Mean profit over all test windows: {mean_profit_test}")
         logger.info(f"CVaR 95% over all test windows: {cvar95_test}")
@@ -903,7 +903,7 @@ def run_backtest(cfg: DictConfig) -> list:
         "test_profit_cvar": cvar95_test,
     }
     logger.info("Backtest completed.")
-    return all_results, avg_metrics, avg_metrics_thresholded, all_train_results_dfs, all_test_results_dfs
+    return all_results, avg_metrics, avg_metrics_thresholded, all_train_results_dfs, all_test_results_dfs, cfg_snapshot
 
 @hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev")
 def main(cfg: DictConfig) -> None:
@@ -912,7 +912,7 @@ def main(cfg: DictConfig) -> None:
     random.seed(seed)
     np.random.seed(seed)
 
-    results, metrics, metrics_thresholded, all_train_results_dfs, all_test_results_dfs = run_backtest(cfg)
+    results, metrics, metrics_thresholded, all_train_results_dfs, all_test_results_dfs, cfg = run_backtest(cfg)
 
     if not results:
         logger.warning("No results generated")
