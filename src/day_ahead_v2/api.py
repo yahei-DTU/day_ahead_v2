@@ -32,11 +32,11 @@ class ItemEnum(Enum):
     lenet = "lenet"
 
 @app.get("/restric_items/{item_id}")
-def read_item(item_id: ItemEnum):
+def read_restricted_item(item_id: ItemEnum):
     return {"item_id": item_id}
 
 @app.get("/query_items")
-def read_item(item_id: int):
+def query_item(item_id: int):
     return {"item_id": item_id}
 
 database = {'username': [ ], 'password': [ ]}

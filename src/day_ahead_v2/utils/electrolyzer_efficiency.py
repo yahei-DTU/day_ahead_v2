@@ -347,10 +347,10 @@ def initiate_HYP_L(cfg):
 
 def plot_el_curves(model_param, config_dict):
     # Colors for plotting
-    black = "black"
-    red = "#d3494e"
-    green = "#087804"
-    blue = "#0343df"
+    black = "black"  # noqa: F841
+    red = "#d3494e"  # noqa: F841
+    green = "#087804"  # noqa: F841
+    blue = "#0343df"  # noqa: F841
 
     AA = area(model_param)
 
