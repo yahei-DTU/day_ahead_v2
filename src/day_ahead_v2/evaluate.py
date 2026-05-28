@@ -306,3 +306,12 @@ def cvar_profit(profit: pd.Series, alpha: float = 0.05) -> float:
     var_threshold = np.percentile(profit, alpha * 100)
     cvar = profit[profit <= var_threshold].mean()
     return cvar
+
+def mean_profit(profit: pd.Series) -> float:
+    """
+    Calculate the mean profit.
+    """
+    if profit.isna().any():
+        logger.error("Profit series contains NaN values. Check mean_profit method.")
+        profit = profit.dropna()
+    return profit.mean()

@@ -12,18 +12,18 @@
 
 # MODELS=(logistic_regression lightgbm xgboost mlp)
 # MODEL=${MODELS[$((LSB_JOBINDEX - 1))]}
-# EXPERIMENTS=(
-# benchmark_exp1_hpp
-# benchmark_exp1_windonly
-# )
-# EXPERIMENT=${EXPERIMENTS[$((LSB_JOBINDEX - 1))]}
+EXPERIMENTS=(
+feature_tuning_exp1
+feature_tuning_exp2
+feature_tuning_exp3
+feature_tuning_exp4
+feature_tuning_exp5
+)
+EXPERIMENT=${EXPERIMENTS[$((LSB_JOBINDEX - 1))]}
 
 
 # DATASETS=(onlyDK1 onlyDK1withoutCrossborder)
 # DATASET=${DATASETS[$((LSB_JOBINDEX - 1))]}
-
-THRESHOLDS=(0.5 0.6 0.7 0.8 0.9)
-THRESHOLD=${THRESHOLDS[$((LSB_JOBINDEX - 1))]}
 
 mkdir -p hpc_output
 cd /zhome/25/9/211757/day_ahead_v2
@@ -33,4 +33,4 @@ export PATH="$HOME/.local/bin:$PATH"   # so uv is found
 uv sync
 source .venv/bin/activate
 
-python -m day_ahead_v2.train --config-name=config_test experiments=alpha_tuning_exp3_hpp "experiments.feature_selection_parameters.shap_cumulative_importance_threshold=${THRESHOLD}"
+python -m day_ahead_v2.train --config-name=config_test experiments=$EXPERIMENT

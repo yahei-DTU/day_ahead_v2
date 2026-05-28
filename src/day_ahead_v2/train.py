@@ -45,7 +45,7 @@ from day_ahead_v2.optimization import (
     ModelClassPolicyHPP, ModelAllOrNothingHPP,
     ModelClassPolicyWindOnly, ModelAllOrNothingWindOnly,
 )
-from day_ahead_v2.evaluate import evaluate_classifier, compute_accuracy_f1, threshold_predictions, calculate_profit, cvar_profit
+from day_ahead_v2.evaluate import evaluate_classifier, compute_accuracy_f1, threshold_predictions, calculate_profit, cvar_profit, mean_profit
 from day_ahead_v2.utils.sanitize_names import sanitize_column_names
 from day_ahead_v2.utils import electrolyzer_efficiency
 
