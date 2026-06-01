@@ -33,7 +33,8 @@ optimization_parameters:
   use_cvar_constraint: true # Whether to add a CVaR constraint on balancing cost
   cvar_alpha: 0.95 # Confidence level for CVaR
   cvar_limit: 43.79 # Upper bound on CVaR of (lambda_DA_hat - lambda_B_hat)*p_B
+  cvar_beta: 0.5 # Weight on expected profit; (1-beta) is weight on CVaR of imbalance cost
 
 feature_selection_parameters:
-  shap_cumulative_importance_threshold: 0.9 # Threshold for cumulative importance in SHAP feature selection
+  shap_cumulative_importance_threshold: 0.6 # Threshold for cumulative importance in SHAP feature selection
   plot_shap_importance: true # Whether to plot SHAP feature importance
