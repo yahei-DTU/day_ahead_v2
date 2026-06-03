@@ -1,0 +1,37 @@
+dataset_name: "wind_imbalance2025"
+
+type: pandas.CSVDataSet
+filename: wind_and_imbalance.csv
+filepath: "data/processed/"
+
+validation:
+  enabled: true
+  thresholds:
+    missing_warn_pct: 1.0
+    missing_fail_pct: 5.0
+    duplicate_warn_pct: 1.0
+    duplicate_fail_pct: 5.0
+
+optimization:
+  lambda_DA_hat: "SpotPriceEUR_DK1"
+  lambda_B_hat: "ImbalancePriceEUR_DK1"
+  P_W_hat: "WindPowerRealized"
+  P_W_tilde: "WindPowerForecast"
+
+transform:
+  label_mapping:
+  drop_columns:
+  rename_columns:
+  hot_encode:
+    columns:
+  drop_duplicates: true
+  drop_missing_threshold:
+  fill_missing:
+    method: "forward" # mean, median, mode, forward, backward, interpolate, zero
+  convert_types:
+  normalize:
+    method: "zscore" # min-max, z-score
+    columns:
+
+training:
+  datetime_column: TimeUTC

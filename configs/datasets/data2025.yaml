@@ -1,0 +1,244 @@
+dataset_name: "data2025"
+
+type: pandas.ParquetDataSet
+filename: data2025.parquet
+filepath: "data/processed/"
+load_args:
+  engine: "pyarrow"
+save_args:
+  engine: "pyarrow"
+
+validation:
+  enabled: true
+  thresholds:
+    missing_warn_pct: 1.0
+    missing_fail_pct: 5.0
+    duplicate_warn_pct: 1.0
+    duplicate_fail_pct: 5.0
+
+optimization:
+  lambda_DA_hat: "SpotPriceEUR_DK1"
+  lambda_B_hat: "ImbalancePriceEUR_DK1"
+  P_W_hat: "WindPowerRealized"
+  P_W_tilde: "WindPowerForecast"
+  model_mapping:
+    0: Deficit
+    1: Surplus
+    2: Balance
+
+transform:
+  remove_classes:
+    # target_classes: [Balance]
+  label_mapping:
+    target_classes:
+      Deficit: 0
+      Surplus: 1
+      Balance: 2
+  drop_columns:
+  rename_columns:
+  hot_encode:
+    columns:
+  drop_duplicates: true
+  drop_missing_threshold: 0.1
+  fill_missing:
+    method: "forward" # mean, median, mode, forward, backward, interpolate, zero
+  convert_types:
+  normalize:
+    method: "zscore" # minmax, zscore
+    columns: ${datasets.training.feature_columns_flex}
+
+training:
+  datetime_column: datetime
+  target_column: target_classes
+  fallback_class: 2
+  feature_columns_fix:
+    - sin_hour
+    - cos_hour
+    - sin_dayofweek
+    - cos_dayofweek
+  feature_columns_flex:
+    - BalancingDemand_DK1_Lag
+    - SpotPriceEUR_DK1_Lag
+    - BalancingDemand_DK2_Lag
+    - SpotPriceEUR_DK2_Lag
+    - mFRR_UpProcuredMW_DK1
+    - mFRR_UpPriceEUR_DK1
+    - mFRR_DownProcuredMW_DK1
+    - mFRR_DownPriceEUR_DK1
+    - WindForecastError_Lag
+    - WindPowerForecast_feature
+    - aFRR_Down_Prices_DK_1
+    - aFRR_Down_Quantity_DK_1
+    - aFRR_Up_Prices_DK_1
+    - aFRR_Up_Quantity_DK_1
+    - aFRR_Down_Prices_DK_2
+    - aFRR_Down_Quantity_DK_2
+    - aFRR_Up_Prices_DK_2
+    - aFRR_Up_Quantity_DK_2
+    - aFRR_Down_Prices_NO_2
+    - aFRR_Down_Quantity_NO_2
+    - aFRR_Up_Prices_NO_2
+    - aFRR_Up_Quantity_NO_2
+    - aFRR_Down_Prices_SE_3
+    - aFRR_Down_Quantity_SE_3
+    - aFRR_Up_Prices_SE_3
+    - aFRR_Up_Quantity_SE_3
+    - aFRR_Down_Prices_NL
+    - aFRR_Down_Quantity_NL
+    - aFRR_Up_Prices_NL
+    - aFRR_Up_Quantity_NL
+    - mFRR_Down_Prices_DK_2
+    - mFRR_Down_Quantity_DK_2
+    - mFRR_Up_Prices_DK_2
+    - mFRR_Up_Quantity_DK_2
+    - mFRR_Down_Prices_NO_2
+    - mFRR_Down_Quantity_NO_2
+    - mFRR_Up_Prices_NO_2
+    - mFRR_Up_Quantity_NO_2
+    - mFRR_Down_Prices_NL
+    - mFRR_Down_Quantity_NL
+    - mFRR_Up_Prices_NL
+    - mFRR_Up_Quantity_NL
+    - SpotPriceEUR_DE_LU_Lag
+    - SpotPriceEUR_NO_2_Lag
+    - SpotPriceEUR_SE_3_Lag
+    - SpotPriceEUR_NL_Lag
+    - generation_forecast_DK_1
+    - generation_forecast_DE_LU
+    - generation_forecast_DK_2
+    - generation_forecast_NO_2
+    - generation_forecast_SE_3
+    - generation_forecast_NL
+    - forecast_Solar_DK_1
+    - forecast_Wind_Offshore_DK_1
+    - forecast_Wind_Onshore_DK_1
+    - forecast_Solar_DE_LU
+    - forecast_Wind_Offshore_DE_LU
+    - forecast_Wind_Onshore_DE_LU
+    - forecast_Solar_DK_2
+    - forecast_Wind_Offshore_DK_2
+    - forecast_Wind_Onshore_DK_2
+    - forecast_Solar_NO_2
+    - forecast_Wind_Onshore_NO_2
+    - forecast_Solar_SE_3
+    - forecast_Wind_Onshore_SE_3
+    - forecast_Solar_NL
+    - forecast_Wind_Offshore_NL
+    - forecast_Wind_Onshore_NL
+    - Short_DK_1_Lag
+    - Short_DK_2_Lag
+    - Short_NO_2_Lag
+    - Short_SE_3_Lag
+    - Long_NL_Lag
+    - Short_NL_Lag
+    - Imbalance_Volume_NO_2_Lag
+    - Forecasted_Load_DK_1
+    - Forecasted_Load_DE_LU
+    - Forecasted_Load_DK_2
+    - Forecasted_Load_NO_2
+    - Forecasted_Load_SE_3
+    - Forecasted_Load_NL
+    - Load_Error_DK_1_Lag
+    - Load_Error_DE_LU_Lag
+    - Load_Error_DK_2_Lag
+    - Load_Error_NO_2_Lag
+    - Load_Error_SE_3_Lag
+    - Load_Error_NL_Lag
+    - net_position_DK_1_Lag
+    - net_position_DE_LU_Lag
+    - net_position_DK_2_Lag
+    - net_position_NO_2_Lag
+    - net_position_SE_3_Lag
+    - net_position_NL_Lag
+    - net_transfer_forecast_DK_1_DE_LU
+    - net_transfer_forecast_DK_1_NL
+    - net_transfer_forecast_DK_1_GB
+    - net_transfer_forecast_DE_LU_DK_1
+    - net_transfer_forecast_NL_DK_1
+    - net_transfer_forecast_GB_DK_1
+    - scheduled_exchanges_DK_1_DE_LU
+    - scheduled_exchanges_DK_1_DK_2
+    - scheduled_exchanges_DK_1_NO_2
+    - scheduled_exchanges_DK_1_SE_3
+    - scheduled_exchanges_DK_1_NL
+    - scheduled_exchanges_DK_1_GB
+    - scheduled_exchanges_DE_LU_DK_1
+    - scheduled_exchanges_DK_2_DK_1
+    - scheduled_exchanges_NO_2_DK_1
+    - scheduled_exchanges_SE_3_DK_1
+    - scheduled_exchanges_NL_DK_1
+    - scheduled_exchanges_GB_DK_1
+    - temperature_2m_57.5N_8.0E
+    - cloud_cover_57.5N_8.0E
+    - wind_speed_10m_57.5N_8.0E
+    - wind_direction_10m_57.5N_8.0E
+    - temperature_2m_56.25N_8.25E
+    - cloud_cover_56.25N_8.25E
+    - wind_speed_10m_56.25N_8.25E
+    - wind_direction_10m_56.25N_8.25E
+    - temperature_2m_54.75N_8.5E
+    - cloud_cover_54.75N_8.5E
+    - wind_speed_10m_54.75N_8.5E
+    - wind_direction_10m_54.75N_8.5E
+    - temperature_2m_57.0N_9.75E
+    - cloud_cover_57.0N_9.75E
+    - wind_speed_10m_57.0N_9.75E
+    - wind_direction_10m_57.0N_9.75E
+    - temperature_2m_56.0N_9.0E
+    - cloud_cover_56.0N_9.0E
+    - wind_speed_10m_56.0N_9.0E
+    - wind_direction_10m_56.0N_9.0E
+    - temperature_2m_55.5N_9.5E
+    - cloud_cover_55.5N_9.5E
+    - wind_speed_10m_55.5N_9.5E
+    - wind_direction_10m_55.5N_9.5E
+    - temperature_2m_56.25N_10.25E
+    - cloud_cover_56.25N_10.25E
+    - wind_speed_10m_56.25N_10.25E
+    - wind_direction_10m_56.25N_10.25E
+    - temperature_2m_55.75N_9.75E
+    - cloud_cover_55.75N_9.75E
+    - wind_speed_10m_55.75N_9.75E
+    - wind_direction_10m_55.75N_9.75E
+    - temperature_2m_55.5N_10.25E
+    - cloud_cover_55.5N_10.25E
+    - wind_speed_10m_55.5N_10.25E
+    - wind_direction_10m_55.5N_10.25E
+    - temperature_2m_55.0N_9.75E
+    - cloud_cover_55.0N_9.75E
+    - wind_speed_10m_55.0N_9.75E
+    - wind_direction_10m_55.0N_9.75E
+    - target_continuous_lag
+    - solar_delta_1h_DK_1
+    - wind_offshore_delta_1h_DK_1
+    - residual_load_DK_1
+    - energy_balance_DK_1
+    - mFRR_volumen_spread_DK1
+    - mFRR_price_spread_DK1
+    - aFRR_volumen_spread_DK_1
+    - aFRR_price_spread_DK_1
+    - solar_delta_1h_DE_LU
+    - wind_offshore_delta_1h_DE_LU
+    - residual_load_DE_LU
+    - solar_delta_1h_DK_2
+    - wind_offshore_delta_1h_DK_2
+    - residual_load_DK_2
+    - mFRR_volumen_spread_DK_2
+    - mFRR_price_spread_DK_2
+    - aFRR_volumen_spread_DK_2
+    - aFRR_price_spread_DK_2
+    - solar_delta_1h_NO_2
+    - mFRR_volumen_spread_NO_2
+    - mFRR_price_spread_NO_2
+    - aFRR_volumen_spread_NO_2
+    - aFRR_price_spread_NO_2
+    - solar_delta_1h_SE_3
+    - aFRR_volumen_spread_SE_3
+    - aFRR_price_spread_SE_3
+    - solar_delta_1h_NL
+    - wind_offshore_delta_1h_NL
+    - residual_load_NL
+    - mFRR_volumen_spread_NL
+    - mFRR_price_spread_NL
+    - aFRR_volumen_spread_NL
+    - aFRR_price_spread_NL

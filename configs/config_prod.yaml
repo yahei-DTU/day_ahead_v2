@@ -1,0 +1,20 @@
+defaults:
+  - datasets: data2025
+  - models: lightgbm
+  - experiments: benchmark_exp1_windonly
+  - _self_
+
+project_root: "${hydra:runtime.cwd}"
+seed: 42
+
+hydra:
+  job_logging:
+    version: 1
+    root:
+      level: WARNING
+      handlers: [console, file]
+  hydra_logging:
+    level: WARNING
+
+results:
+  save_path: "reports/${experiments.experiment_name}/${models.model_name}/${datasets.dataset_name}/"

@@ -1,0 +1,26 @@
+dataset_name: "openmeteo"
+
+validation:
+  enabled: true
+  thresholds:
+    missing_warn_pct: 1.0
+    missing_fail_pct: 5.0
+    duplicate_warn_pct: 1.0
+    duplicate_fail_pct: 5.0
+
+start_date: 2025-01-01
+end_date: 2026-03-02
+savepath: data/raw/openmeteo/
+api_url: https://archive-api.open-meteo.com/v1/archive
+
+parameters:
+  latitude: [57.5, 56.1, 54.8, 57.0, 56.1, 55.5, 56.2, 55.7, 55.4, 55.0]
+  longitude: [8.0, 8.1, 8.4, 9.7, 9.0, 9.5, 10.2, 9.7, 10.3, 9.7]
+  start_date: ${datasets.start_date}
+  end_date: ${datasets.end_date}
+  hourly:
+    - temperature_2m
+    - cloud_cover
+    - wind_speed_10m
+    - wind_direction_10m
+  models: era5
