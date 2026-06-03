@@ -33,6 +33,8 @@ from datetime import datetime, timedelta
 import time
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from pathlib import Path
 from itertools import product
@@ -44,6 +46,7 @@ from day_ahead_v2.data import PandasHandler, DataHandler
 from day_ahead_v2.optimization import (
     ModelClassPolicyHPP, ModelAllOrNothingHPP,
     ModelClassPolicyWindOnly, ModelAllOrNothingWindOnly,
+    ModelHindsightPrimeHPP, ModelHindsightPrimeWindOnly
 )
 from day_ahead_v2.evaluate import evaluate_classifier, compute_accuracy_f1, threshold_predictions, calculate_profit, cvar_profit, mean_profit
 from day_ahead_v2.utils.sanitize_names import sanitize_column_names
@@ -54,6 +57,8 @@ _OPTIMIZER_CLASSES = {
     ("all_or_nothing", "hpp"):       ModelAllOrNothingHPP,
     ("class_policy",   "wind_only"): ModelClassPolicyWindOnly,
     ("all_or_nothing", "wind_only"): ModelAllOrNothingWindOnly,
+    ("hindsight",      "hpp"):       ModelHindsightPrimeHPP,
+    ("hindsight",      "wind_only"): ModelHindsightPrimeWindOnly,
 }
 
 logger = logging.getLogger(__name__)
@@ -302,16 +307,12 @@ def feature_selection(cfg: DictConfig, data: pd.DataFrame, start: datetime, end:
 
 def train_batch(cfg: DictConfig, X_train: pd.DataFrame, y_train: pd.Series, hyperparameters: dict, sample_weight: pd.Series | None = None) -> object:
     """Train model for a single rolling window and hyperparameter set."""
-    # X_train = X_train.copy()
-    # y_train = y_train.copy()
     logger.debug(f"Start training model for window {X_train.index.min()} to {X_train.index.max()} with hyperparameters: {hyperparameters}")
-    # Check if types are correct
     if not isinstance(X_train, pd.DataFrame):
         raise TypeError(f"X_train must be a pd.DataFrame, got {type(X_train)}")
     if not isinstance(y_train, pd.Series):
         raise TypeError(f"y_train must be a pd.Series, got {type(y_train)}")
 
-    # Instantiate model for given window and hyperparameters
     base_params = OmegaConf.to_container(cfg.models.model_parameters, resolve=True)
 
     if cfg.models._target_.endswith("MLPClassifier"):
@@ -475,107 +476,122 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
 
     alphas = cfg.experiments.experiment_parameters.get("decision_threshold_alphas", [0.5])
 
+    metric_name = cfg.experiments.experiment_parameters.get('threshold_alpha_tuning', 'mean_profit')
     best_alpha = None
     best_metric_profit = -np.inf
     logger.info(f"Best model classes: {best_model.classes_}")
-    for alpha in alphas:
-        threshold_preds_df_train = threshold_predictions(cfg, best_train_results_df.filter(like="proba_class_").to_numpy(), alpha)
-        threshold_preds_df_val = threshold_predictions(cfg, best_val_results_df.filter(like="proba_class_").to_numpy(), alpha)
-        X_ = X_train.copy()
-        # Set index of threshold_preds_df to match X_
-        threshold_preds_df_train.index = X_.index
-        X_["thresholded_label"] = threshold_preds_df_train["thresholded_label"]
-        X_["uncertain"] = threshold_preds_df_train["uncertain"]
-        X_["predicted_proba"] = threshold_preds_df_train["predicted_proba"]
-        failed_alpha = False
-        logger.debug(f"Optimizing for alpha={alpha} with predicted labels: {threshold_preds_df_train['thresholded_label'].unique()}")
-        del threshold_preds_df_train
-        # Check if any count is below threshold
-        label_counts = X_["thresholded_label"].value_counts()
-        logger.debug(f"Predicted label counts for alpha={alpha}:\n{label_counts}")
-        for label_, count in label_counts.items():
-            logger.info(f"Found {count} samples for predicted label {label_} in validation set.")
-        filtered_counts = label_counts[label_counts.index != cfg.datasets.training.fallback_class]
-        rare_labels = filtered_counts[filtered_counts < 50].index.tolist()
-        if rare_labels:
-            logger.warning(
-                f"Labels {rare_labels} have fewer than 50 samples for alpha={alpha}. Reassigning to fallback_class."
-            )
-            X_.loc[X_["thresholded_label"].isin(rare_labels), "thresholded_label"] = cfg.datasets.training.fallback_class
-        datetime_index = X_.index
-        data_optimization = data_handler.data.loc[datetime_index]
-        X_features = pd.concat([X_train.loc[datetime_index], X_.loc[datetime_index][["predicted_proba"]]], axis=1)
-        lambda_DA_hat = data_optimization[cfg.datasets.optimization.lambda_DA_hat]
-        lambda_B_hat = data_optimization[cfg.datasets.optimization.lambda_B_hat]
-        P_W_hat = data_optimization[cfg.datasets.optimization.P_W_hat]
-        P_W_tilde = data_optimization[cfg.datasets.optimization.P_W_tilde]
-        optimizer_cls = _OPTIMIZER_CLASSES[(cfg.experiments.optimization_parameters.model, portfolio)]
-        optimizer = optimizer_cls(
-            cfg = cfg,
-            lambda_DA_hat = lambda_DA_hat,
-            lambda_B_hat = lambda_B_hat,
-            P_W_hat = P_W_hat,
-            P_W_tilde = P_W_tilde,
-            X_features = X_features,
-            pred_labels= X_["thresholded_label"]
-        )
-        optimizer.build_model()
-        # Save LP file for debugging
-        root = Path(cfg.project_root)
-        save_path = root / "models" / "lp_files" / f"model_alpha{alpha}.lp"
-        try:
-            save_path.parent.mkdir(parents=True, exist_ok=True)
-            optimizer.model.to_file(save_path)
-        except OSError as e:
-            logger.warning(f"Could not save LP file to {save_path}: {e}")
-        try:
-            optimizer.run_optimization()
-        except Exception as e:
-            logger.error(
-                f"Optimization failed for alpha={alpha}: {e}"
-            )
-            failed_alpha = True
-            break
-        if optimizer.results.status != "ok":
-            logger.error(
-                f"Optimization did not converge for alpha={alpha}. Status: {optimizer.results.status}"
-            )
-            failed_alpha = True
-            break
-        if failed_alpha:
-            logger.warning(f"Skipping alpha={alpha} due to optimization failure.")
-            continue
 
-        # Calculate profit on validation set using optimized bids
-        X_ = X_val.copy()
-        threshold_preds_df_val.index = X_.index
-        if rare_labels:
-            threshold_preds_df_val.loc[threshold_preds_df_val["thresholded_label"].isin(rare_labels), "thresholded_label"] = cfg.datasets.training.fallback_class
-            logger.info(f"Validation: reassigned rare labels {rare_labels} to fallback_class to match training.")
-        X_["thresholded_label"] = threshold_preds_df_val["thresholded_label"]
-        X_["uncertain"] = threshold_preds_df_val["uncertain"]
-        X_["predicted_proba"] = threshold_preds_df_val["predicted_proba"]
-        label_counts = X_["thresholded_label"].value_counts()
-        logger.debug(f"Predicted label counts for alpha={alpha}:\n{label_counts}")
-        datetime_index = X_.index
-        data_optimization = data_handler.data.loc[datetime_index]
-        X_features = pd.concat([X_val.loc[datetime_index], X_.loc[datetime_index][["predicted_proba"]]], axis=1)
-        val_bids = optimizer.calculate_bids(cfg, data_optimization, X_features, threshold_preds_df_val)
-        p_DA_val, p_B_val = val_bids[0], val_bids[1]
-        h_val = val_bids[3] if is_hpp else pd.Series(0.0, index=p_DA_val.index)
-        lambda_DA_hat_val = data_optimization[cfg.datasets.optimization.lambda_DA_hat]
-        lambda_B_hat_val = data_optimization[cfg.datasets.optimization.lambda_B_hat]
-        h2_price = cfg.experiments.optimization_parameters.hydrogen_price if is_hpp else 0.0
-        profit_val = calculate_profit(p_DA_val, h_val, p_B_val, lambda_DA_hat_val, h2_price, lambda_B_hat_val)
-        metric_name = cfg.experiments.experiment_parameters.get('threshold_alpha_tuning', 'mean_profit')
-        profit_metric_val = getattr(sys.modules[__name__], metric_name)(profit_val)
-        logger.info(f"Alpha {alpha} → {metric_name} on validation set: {profit_metric_val:.2f}")
+    if metric_name == 'accuracy':
+        fallback_class = cfg.datasets.training.fallback_class
+        val_proba = best_val_results_df.filter(like="proba_class_").to_numpy()
+        mask = y_val.values != fallback_class
+        for alpha in alphas:
+            threshold_preds_df_val = threshold_predictions(cfg, val_proba, alpha)
+            threshold_preds_df_val.index = X_val.index
+            acc = (threshold_preds_df_val["thresholded_label"].values[mask] == y_val.values[mask]).mean()
+            logger.info(f"Alpha {alpha} → accuracy on validation set: {acc:.4f}")
+            if acc > best_metric_profit:
+                best_metric_profit = acc
+                best_alpha = alpha
+        logger.info(f"Best decision threshold alpha: {best_alpha} with accuracy={best_metric_profit:.4f} on validation set")
+    else:
+        for alpha in alphas:
+            threshold_preds_df_train = threshold_predictions(cfg, best_train_results_df.filter(like="proba_class_").to_numpy(), alpha)
+            threshold_preds_df_val = threshold_predictions(cfg, best_val_results_df.filter(like="proba_class_").to_numpy(), alpha)
+            X_ = X_train.copy()
+            # Set index of threshold_preds_df to match X_
+            threshold_preds_df_train.index = X_.index
+            X_["thresholded_label"] = threshold_preds_df_train["thresholded_label"]
+            X_["uncertain"] = threshold_preds_df_train["uncertain"]
+            X_["predicted_proba"] = threshold_preds_df_train["predicted_proba"]
+            failed_alpha = False
+            logger.debug(f"Optimizing for alpha={alpha} with predicted labels: {threshold_preds_df_train['thresholded_label'].unique()}")
+            del threshold_preds_df_train
+            # Check if any count is below threshold
+            label_counts = X_["thresholded_label"].value_counts()
+            logger.debug(f"Predicted label counts for alpha={alpha}:\n{label_counts}")
+            for label_, count in label_counts.items():
+                logger.info(f"Found {count} samples for predicted label {label_} in validation set.")
+            filtered_counts = label_counts[label_counts.index != cfg.datasets.training.fallback_class]
+            rare_labels = filtered_counts[filtered_counts < 50].index.tolist()
+            if rare_labels:
+                logger.warning(
+                    f"Labels {rare_labels} have fewer than 50 samples for alpha={alpha}. Reassigning to fallback_class."
+                )
+                X_.loc[X_["thresholded_label"].isin(rare_labels), "thresholded_label"] = cfg.datasets.training.fallback_class
+            datetime_index = X_.index
+            data_optimization = data_handler.data.loc[datetime_index]
+            X_features = pd.concat([X_train.loc[datetime_index], X_.loc[datetime_index][["predicted_proba"]]], axis=1)
+            lambda_DA_hat = data_optimization[cfg.datasets.optimization.lambda_DA_hat]
+            lambda_B_hat = data_optimization[cfg.datasets.optimization.lambda_B_hat]
+            P_W_hat = data_optimization[cfg.datasets.optimization.P_W_hat]
+            P_W_tilde = data_optimization[cfg.datasets.optimization.P_W_tilde]
+            optimizer_cls = _OPTIMIZER_CLASSES[(cfg.experiments.optimization_parameters.model, portfolio)]
+            optimizer = optimizer_cls(
+                cfg = cfg,
+                lambda_DA_hat = lambda_DA_hat,
+                lambda_B_hat = lambda_B_hat,
+                P_W_hat = P_W_hat,
+                P_W_tilde = P_W_tilde,
+                X_features = X_features,
+                pred_labels= X_["thresholded_label"]
+            )
+            optimizer.build_model()
+            # Save LP file for debugging
+            root = Path(cfg.project_root)
+            save_path = root / "models" / "lp_files" / f"model_alpha{alpha}.lp"
+            try:
+                save_path.parent.mkdir(parents=True, exist_ok=True)
+                optimizer.model.to_file(save_path)
+            except OSError as e:
+                logger.warning(f"Could not save LP file to {save_path}: {e}")
+            try:
+                optimizer.run_optimization()
+            except Exception as e:
+                logger.error(
+                    f"Optimization failed for alpha={alpha}: {e}"
+                )
+                failed_alpha = True
+                break
+            if optimizer.results.status != "ok":
+                logger.error(
+                    f"Optimization did not converge for alpha={alpha}. Status: {optimizer.results.status}"
+                )
+                failed_alpha = True
+                break
+            if failed_alpha:
+                logger.warning(f"Skipping alpha={alpha} due to optimization failure.")
+                continue
 
-        if profit_metric_val > best_metric_profit:
-            best_metric_profit = profit_metric_val
-            best_alpha = alpha
+            # Calculate profit on validation set using optimized bids
+            X_ = X_val.copy()
+            threshold_preds_df_val.index = X_.index
+            if rare_labels:
+                threshold_preds_df_val.loc[threshold_preds_df_val["thresholded_label"].isin(rare_labels), "thresholded_label"] = cfg.datasets.training.fallback_class
+                logger.info(f"Validation: reassigned rare labels {rare_labels} to fallback_class to match training.")
+            X_["thresholded_label"] = threshold_preds_df_val["thresholded_label"]
+            X_["uncertain"] = threshold_preds_df_val["uncertain"]
+            X_["predicted_proba"] = threshold_preds_df_val["predicted_proba"]
+            label_counts = X_["thresholded_label"].value_counts()
+            logger.debug(f"Predicted label counts for alpha={alpha}:\n{label_counts}")
+            datetime_index = X_.index
+            data_optimization = data_handler.data.loc[datetime_index]
+            X_features = pd.concat([X_val.loc[datetime_index], X_.loc[datetime_index][["predicted_proba"]]], axis=1)
+            val_bids = optimizer.calculate_bids(cfg, data_optimization, X_features, threshold_preds_df_val)
+            p_DA_val, p_B_val = val_bids[0], val_bids[1]
+            h_val = val_bids[3] if is_hpp else pd.Series(0.0, index=p_DA_val.index)
+            lambda_DA_hat_val = data_optimization[cfg.datasets.optimization.lambda_DA_hat]
+            lambda_B_hat_val = data_optimization[cfg.datasets.optimization.lambda_B_hat]
+            h2_price = cfg.experiments.optimization_parameters.hydrogen_price if is_hpp else 0.0
+            profit_val = calculate_profit(p_DA_val, h_val, p_B_val, lambda_DA_hat_val, h2_price, lambda_B_hat_val)
+            profit_metric_val = getattr(sys.modules[__name__], metric_name)(profit_val)
+            logger.info(f"Alpha {alpha} → {metric_name} on validation set: {profit_metric_val:.2f}")
 
-    logger.info(f"Best decision threshold alpha: {best_alpha} with {cfg.experiments.experiment_parameters.get('threshold_alpha_tuning', 'mean_profit')}={best_metric_profit:.2f} on validation set")
+            if profit_metric_val > best_metric_profit:
+                best_metric_profit = profit_metric_val
+                best_alpha = alpha
+
+        logger.info(f"Best decision threshold alpha: {best_alpha} with {metric_name}={best_metric_profit:.2f} on validation set")
 
     # ---------------------------------------------
     # Retrain on train + validation
@@ -753,7 +769,6 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
         "valid_end": valid_end,
         "test_start": test_start,
         "test_end": test_end,
-        "CVaR": optimizer_final.results.CVaR if hasattr(optimizer_final.results, "CVaR") else np.nan,
         "best_alpha": best_alpha,
         **best_params,
     }

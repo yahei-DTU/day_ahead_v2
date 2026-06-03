@@ -243,6 +243,71 @@ class ModelHindsightHPP(ModelHindsightWindOnly):
         self.results.p_H = self.model.variables["p_H"].solution.to_pandas()
         self.results.h = self.model.variables["h"].solution.to_pandas()
 
+
+class ModelHindsightPrimeHPP(ModelHindsightHPP):
+    """Hindsight HPP model that forces wind forecast bid for label 2, free hindsight for labels 0 and 1."""
+    def __init__(
+            self,
+            cfg: DictConfig,
+            lambda_DA_hat: pd.Series,
+            lambda_B_hat: pd.Series,
+            P_W_hat: pd.Series,
+            P_W_tilde: pd.Series,
+            X_features: pd.DataFrame,
+            pred_labels: pd.Series,
+            **kwargs,
+        ):
+        super().__init__(cfg, lambda_DA_hat, lambda_B_hat, P_W_hat, **kwargs)
+        assert lambda_DA_hat.index.equals(pred_labels.index)
+        assert lambda_DA_hat.index.equals(P_W_tilde.index)
+        self.parameters.pred_labels = pred_labels
+        self.parameters.P_W_tilde = xr.DataArray(
+            P_W_tilde.values,
+            dims=["datetime"],
+            coords={
+                "datetime": self.constants.T,
+                "day": ("datetime", self.constants.D)
+            }
+        )
+
+    def _set_constraints(self):
+        super()._set_constraints()
+        mask = (self.parameters.pred_labels == 2).values
+        if mask.sum() > 0:
+            self.model.add_constraints(
+                self.model.variables["p_DA"][mask] == self.parameters.P_W_tilde[mask],
+                name="bid_forecast"
+            )
+
+    def calculate_bids(self, cfg, data_df: pd.DataFrame, features: pd.DataFrame, preds_df: pd.DataFrame):
+        """Solve hindsight-prime optimization on test data: label-2 fixed to wind forecast, others free."""
+        lambda_DA_hat = data_df[cfg.datasets.optimization.lambda_DA_hat]
+        lambda_B_hat = data_df[cfg.datasets.optimization.lambda_B_hat]
+        P_W_hat = data_df[cfg.datasets.optimization.P_W_hat]
+        P_W_tilde = data_df[cfg.datasets.optimization.P_W_tilde]
+        pred_labels = preds_df["thresholded_label"]
+
+        test_optimizer = ModelHindsightPrimeHPP(
+            cfg=cfg,
+            lambda_DA_hat=lambda_DA_hat,
+            lambda_B_hat=lambda_B_hat,
+            P_W_hat=P_W_hat,
+            P_W_tilde=P_W_tilde,
+            X_features=features,
+            pred_labels=pred_labels,
+        )
+        test_optimizer.build_model()
+        test_optimizer.run_optimization()
+        if test_optimizer.results.status != "ok":
+            logger.warning(f"Hindsight prime test optimization did not converge. Status: {test_optimizer.results.status}")
+        return (
+            test_optimizer.results.p_DA,
+            test_optimizer.results.p_B,
+            test_optimizer.results.p_H,
+            test_optimizer.results.h,
+        )
+
+
 class ModelSinglePolicyHPP(ModelHindsightHPP):
     """Model that uses a single bid adjustment policy (z) for all timestamps, without differentiating by predicted labels."""
     def __init__(
@@ -289,10 +354,8 @@ class ModelSinglePolicyHPP(ModelHindsightHPP):
         )
 
         opt_params = cfg.experiments.optimization_parameters
-        self.constants.USE_CVAR = opt_params.get("use_cvar_constraint", False)
-        if self.constants.USE_CVAR:
-            self.constants.CVAR_ALPHA = opt_params.get("cvar_alpha", 0.95)
-            self.constants.CVAR_LIMIT = opt_params.get("cvar_limit", 0.0)
+        self.constants.CVAR_ALPHA = opt_params.get("cvar_alpha", 0.95)
+        self.constants.CVAR_BETA = opt_params.get("cvar_beta", 0.5)
 
     def _set_variables(self):
         """Adds additional variables specific to the ModelSinglePolicy."""
@@ -307,39 +370,41 @@ class ModelSinglePolicyHPP(ModelHindsightHPP):
             dims=["feature"],
             coords={"feature": self.constants.FEATURE_DIM}
         )
+        self.model.add_variables(name="VaR")
+        self.model.add_variables(
+            lower=0,
+            name="xi",
+            dims=["datetime"],
+            coords={"datetime": self.constants.T}
+        )
 
-        if self.constants.USE_CVAR:
-            self.model.add_variables(name="VaR")
-            self.model.add_variables(
-                lower=0,
-                name="xi",
-                dims=["datetime"],
-                coords={"datetime": self.constants.T}
-            )
-
-    def _set_cvar_constraints(self):
-        """Adds CVaR constraint on balancing cost using Rockafellar-Uryasev form.
-
-        Enforces: VaR + 1/(T*(1-alpha)) * sum(xi) <= cvar_limit
-        where xi[t] >= (lambda_DA_hat[t] - lambda_B_hat[t]) * p_B[t] - VaR, xi[t] >= 0.
-        """
+    def _set_objective(self):
+        base_profit = (
+            (self.model.variables["p_DA"] * self.parameters.lambda_DA_hat).sum()
+            + (self.model.variables["p_B"] * self.parameters.lambda_B_hat).sum()
+            + (self.model.variables["h"] * self.constants.H2_PRICE).sum()
+        )
         T = len(self.constants.T)
         alpha = self.constants.CVAR_ALPHA
-        price_diff = self.parameters.lambda_DA_hat - self.parameters.lambda_B_hat
+        beta = self.constants.CVAR_BETA
+        cvar = self.model.variables["VaR"] - (1.0 / (T * (1.0 - alpha))) * self.model.variables["xi"].sum()
+        self.model.add_objective(beta * base_profit + (1.0 - beta) * cvar, sense="max")
 
-        # xi[t] >= (lambda_DA_hat[t] - lambda_B_hat[t]) * p_B[t] - VaR
+    def _set_cvar_constraints(self):
+        """Adds auxiliary CVaR variable constraints (Rockafellar-Uryasev form) for the objective.
+
+        xi[t] >= VaR - profit_t, xi[t] >= 0, where profit_t is total per-period profit.
+        """
+        profit_t = (
+            self.model.variables["p_DA"] * self.parameters.lambda_DA_hat
+            + self.model.variables["p_B"] * self.parameters.lambda_B_hat
+            + self.model.variables["h"] * self.constants.H2_PRICE
+        )
         self.model.add_constraints(
-            self.model.variables["xi"] >= price_diff * self.model.variables["p_B"] - self.model.variables["VaR"],
+            self.model.variables["xi"] >= self.model.variables["VaR"] - profit_t,
             name="cvar_xi"
         )
-        # VaR + 1/(T*(1-alpha)) * sum(xi) <= cvar_limit  (Rockafellar-Uryasev)
-        self.model.add_constraints(
-            self.model.variables["VaR"]
-            + (1.0 / (T * (1.0 - alpha))) * self.model.variables["xi"].sum()
-            <= self.constants.CVAR_LIMIT,
-            name="cvar_limit"
-        )
-        logger.info(f"CVaR constraint added: alpha={alpha}, limit={self.constants.CVAR_LIMIT}")
+        logger.info(f"CVaR objective term added: alpha={self.constants.CVAR_ALPHA}, beta={self.constants.CVAR_BETA}")
 
     def _set_constraints(self):
         super()._set_constraints()
@@ -353,20 +418,18 @@ class ModelSinglePolicyHPP(ModelHindsightHPP):
             name="bid_adjustment"
         )
 
-        if self.constants.USE_CVAR:
-            self._set_cvar_constraints()
+        self._set_cvar_constraints()
 
     def _save_results(self):
         super()._save_results()
         self.results.z = self.model.variables["z"].solution.to_pandas()
         self.results.q = self.model.variables["q"].solution.to_pandas()
-        if self.constants.USE_CVAR:
-            self.results.VaR = self.model.variables["VaR"].solution.item()
-            self.results.xi = self.model.variables["xi"].solution.to_pandas()
-            alpha = self.constants.CVAR_ALPHA
-            T = len(self.constants.T)
-            self.results.CVaR = self.results.VaR + (1.0 / (T * (1.0 - alpha))) * self.results.xi.sum()
-            logger.info(f"CVaR solution: VaR={self.results.VaR:.4f}, CVaR={self.results.CVaR:.4f}")
+        self.results.VaR = self.model.variables["VaR"].solution.item()
+        self.results.xi = self.model.variables["xi"].solution.to_pandas()
+        alpha = self.constants.CVAR_ALPHA
+        T = len(self.constants.T)
+        self.results.CVaR = self.results.VaR - (1.0 / (T * (1.0 - alpha))) * self.results.xi.sum()
+        logger.info(f"CVaR solution: VaR={self.results.VaR:.4f}, CVaR={self.results.CVaR:.4f}")
 
     def calculate_bids(self, cfg, data_df: pd.DataFrame, features: pd.DataFrame):
         """Calculate the DA bids and balancing/hydrogen bids using the trained policy."""
@@ -467,10 +530,8 @@ class ModelClassPolicyHPP(ModelHindsightHPP):
         self.parameters.pred_labels = pred_labels
 
         opt_params = cfg.experiments.optimization_parameters
-        self.constants.USE_CVAR = opt_params.get("use_cvar_constraint", False)
-        if self.constants.USE_CVAR:
-            self.constants.CVAR_ALPHA = opt_params.get("cvar_alpha", 0.95)
-            self.constants.CVAR_LIMIT = opt_params.get("cvar_limit", 0.0)
+        self.constants.CVAR_ALPHA = opt_params.get("cvar_alpha", 0.95)
+        self.constants.CVAR_BETA = opt_params.get("cvar_beta", 0.5)
 
     def _set_variables(self):
         """Adds additional variables specific to the ModelLinearPolicy."""
@@ -496,39 +557,41 @@ class ModelClassPolicyHPP(ModelHindsightHPP):
             dims=["feature"],
             coords={"feature": self.constants.FEATURE_DIM}
         )
+        self.model.add_variables(name="VaR")
+        self.model.add_variables(
+            lower=0,
+            name="xi",
+            dims=["datetime"],
+            coords={"datetime": self.constants.T}
+        )
 
-        if self.constants.USE_CVAR:
-            self.model.add_variables(name="VaR")
-            self.model.add_variables(
-                lower=0,
-                name="xi",
-                dims=["datetime"],
-                coords={"datetime": self.constants.T}
-            )
-
-    def _set_cvar_constraints(self):
-        """Adds CVaR constraint on balancing cost using Rockafellar-Uryasev form.
-
-        Enforces: VaR + 1/(T*(1-alpha)) * sum(xi) <= cvar_limit
-        where xi[t] >= (lambda_DA_hat[t] - lambda_B_hat[t]) * p_B[t] - VaR, xi[t] >= 0.
-        """
+    def _set_objective(self):
+        base_profit = (
+            (self.model.variables["p_DA"] * self.parameters.lambda_DA_hat).sum()
+            + (self.model.variables["p_B"] * self.parameters.lambda_B_hat).sum()
+            + (self.model.variables["h"] * self.constants.H2_PRICE).sum()
+        )
         T = len(self.constants.T)
         alpha = self.constants.CVAR_ALPHA
-        price_diff = self.parameters.lambda_DA_hat - self.parameters.lambda_B_hat
+        beta = self.constants.CVAR_BETA
+        cvar = self.model.variables["VaR"] - (1.0 / (T * (1.0 - alpha))) * self.model.variables["xi"].sum()
+        self.model.add_objective(beta * base_profit + (1.0 - beta) * cvar, sense="max")
 
-        # xi[t] >= (lambda_DA_hat[t] - lambda_B_hat[t]) * p_B[t] - VaR
+    def _set_cvar_constraints(self):
+        """Adds auxiliary CVaR variable constraints (Rockafellar-Uryasev form) for the objective.
+
+        xi[t] >= VaR - profit_t, xi[t] >= 0, where profit_t is total per-period profit.
+        """
+        profit_t = (
+            self.model.variables["p_DA"] * self.parameters.lambda_DA_hat
+            + self.model.variables["p_B"] * self.parameters.lambda_B_hat
+            + self.model.variables["h"] * self.constants.H2_PRICE
+        )
         self.model.add_constraints(
-            self.model.variables["xi"] >= price_diff * self.model.variables["p_B"] - self.model.variables["VaR"],
+            self.model.variables["xi"] >= self.model.variables["VaR"] - profit_t,
             name="cvar_xi"
         )
-        # VaR + 1/(T*(1-alpha)) * sum(xi) <= cvar_limit  (Rockafellar-Uryasev)
-        self.model.add_constraints(
-            self.model.variables["VaR"]
-            + (1.0 / (T * (1.0 - alpha))) * self.model.variables["xi"].sum()
-            <= self.constants.CVAR_LIMIT,
-            name="cvar_limit"
-        )
-        logger.info(f"CVaR constraint added: alpha={alpha}, limit={self.constants.CVAR_LIMIT}")
+        logger.info(f"CVaR objective term added: alpha={self.constants.CVAR_ALPHA}, beta={self.constants.CVAR_BETA}")
 
     def _set_constraints(self):
         super()._set_constraints()
@@ -575,8 +638,7 @@ class ModelClassPolicyHPP(ModelHindsightHPP):
             name="bid_adjustment"
         )
 
-        if self.constants.USE_CVAR:
-            self._set_cvar_constraints()
+        self._set_cvar_constraints()
 
         logger.debug(f"X_features shape: {self.parameters.X_features.shape}")
         logger.debug(f"q shape: {self.model.variables['q_1'].shape}")
@@ -589,13 +651,12 @@ class ModelClassPolicyHPP(ModelHindsightHPP):
         self.results.q_0 = self.model.variables["q_0"].solution.to_pandas()
         self.results.q_1 = self.model.variables["q_1"].solution.to_pandas()
         self.results.q_2 = self.model.variables["q_2"].solution.to_pandas()
-        if self.constants.USE_CVAR:
-            self.results.VaR = self.model.variables["VaR"].solution.item()
-            self.results.xi = self.model.variables["xi"].solution.to_pandas()
-            alpha = self.constants.CVAR_ALPHA
-            T = len(self.constants.T)
-            self.results.CVaR = self.results.VaR + (1.0 / (T * (1.0 - alpha))) * self.results.xi.sum()
-            logger.info(f"CVaR solution: VaR={self.results.VaR:.4f}, CVaR={self.results.CVaR:.4f}")
+        self.results.VaR = self.model.variables["VaR"].solution.item()
+        self.results.xi = self.model.variables["xi"].solution.to_pandas()
+        alpha = self.constants.CVAR_ALPHA
+        T = len(self.constants.T)
+        self.results.CVaR = self.results.VaR - (1.0 / (T * (1.0 - alpha))) * self.results.xi.sum()
+        logger.info(f"CVaR solution: VaR={self.results.VaR:.4f}, CVaR={self.results.CVaR:.4f}")
 
     def calculate_bids(self, cfg, data_df: pd.DataFrame, features: pd.DataFrame, preds_df: pd.DataFrame):
         """Calculate the DA bids and balancing/hydrogen bids using the trained policy."""
@@ -795,10 +856,8 @@ class ModelSinglePolicyWindOnly(ModelHindsightWindOnly):
         )
 
         opt_params = cfg.experiments.optimization_parameters
-        self.constants.USE_CVAR = opt_params.get("use_cvar_constraint", False)
-        if self.constants.USE_CVAR:
-            self.constants.CVAR_ALPHA = opt_params.get("cvar_alpha", 0.95)
-            self.constants.CVAR_LIMIT = opt_params.get("cvar_limit", 0.0)
+        self.constants.CVAR_ALPHA = opt_params.get("cvar_alpha", 0.95)
+        self.constants.CVAR_BETA = opt_params.get("cvar_beta", 0.5)
 
     def _set_variables(self):
         super()._set_variables()
@@ -814,31 +873,39 @@ class ModelSinglePolicyWindOnly(ModelHindsightWindOnly):
             dims=["feature"],
             coords={"feature": self.constants.FEATURE_DIM}
         )
+        self.model.add_variables(name="VaR")
+        self.model.add_variables(
+            lower=0,
+            name="xi",
+            dims=["datetime"],
+            coords={"datetime": self.constants.T}
+        )
 
-        if self.constants.USE_CVAR:
-            self.model.add_variables(name="VaR")
-            self.model.add_variables(
-                lower=0,
-                name="xi",
-                dims=["datetime"],
-                coords={"datetime": self.constants.T}
-            )
-
-    def _set_cvar_constraints(self):
+    def _set_objective(self):
+        base_profit = (
+            (self.model.variables["p_DA"] * self.parameters.lambda_DA_hat).sum()
+            + (self.model.variables["p_B"] * self.parameters.lambda_B_hat).sum()
+        )
         T = len(self.constants.T)
         alpha = self.constants.CVAR_ALPHA
-        price_diff = self.parameters.lambda_DA_hat - self.parameters.lambda_B_hat
+        beta = self.constants.CVAR_BETA
+        cvar = self.model.variables["VaR"] - (1.0 / (T * (1.0 - alpha))) * self.model.variables["xi"].sum()
+        self.model.add_objective(beta * base_profit + (1.0 - beta) * cvar, sense="max")
+
+    def _set_cvar_constraints(self):
+        """Adds auxiliary CVaR variable constraints (Rockafellar-Uryasev form) for the objective.
+
+        xi[t] >= VaR - profit_t, xi[t] >= 0, where profit_t is total per-period profit.
+        """
+        profit_t = (
+            self.model.variables["p_DA"] * self.parameters.lambda_DA_hat
+            + self.model.variables["p_B"] * self.parameters.lambda_B_hat
+        )
         self.model.add_constraints(
-            self.model.variables["xi"] >= price_diff * self.model.variables["p_B"] - self.model.variables["VaR"],
+            self.model.variables["xi"] >= self.model.variables["VaR"] - profit_t,
             name="cvar_xi"
         )
-        self.model.add_constraints(
-            self.model.variables["VaR"]
-            + (1.0 / (T * (1.0 - alpha))) * self.model.variables["xi"].sum()
-            <= self.constants.CVAR_LIMIT,
-            name="cvar_limit"
-        )
-        logger.info(f"CVaR constraint added: alpha={alpha}, limit={self.constants.CVAR_LIMIT}")
+        logger.info(f"CVaR objective term added: alpha={self.constants.CVAR_ALPHA}, beta={self.constants.CVAR_BETA}")
 
     def _set_constraints(self):
         super()._set_constraints()
@@ -851,20 +918,18 @@ class ModelSinglePolicyWindOnly(ModelHindsightWindOnly):
             self.model.variables["p_DA"] - self.model.variables["z"] == self.parameters.P_W_tilde,
             name="bid_adjustment"
         )
-        if self.constants.USE_CVAR:
-            self._set_cvar_constraints()
+        self._set_cvar_constraints()
 
     def _save_results(self):
         super()._save_results()
         self.results.z = self.model.variables["z"].solution.to_pandas()
         self.results.q = self.model.variables["q"].solution.to_pandas()
-        if self.constants.USE_CVAR:
-            self.results.VaR = self.model.variables["VaR"].solution.item()
-            self.results.xi = self.model.variables["xi"].solution.to_pandas()
-            alpha = self.constants.CVAR_ALPHA
-            T = len(self.constants.T)
-            self.results.CVaR = self.results.VaR + (1.0 / (T * (1.0 - alpha))) * self.results.xi.sum()
-            logger.info(f"CVaR solution: VaR={self.results.VaR:.4f}, CVaR={self.results.CVaR:.4f}")
+        self.results.VaR = self.model.variables["VaR"].solution.item()
+        self.results.xi = self.model.variables["xi"].solution.to_pandas()
+        alpha = self.constants.CVAR_ALPHA
+        T = len(self.constants.T)
+        self.results.CVaR = self.results.VaR - (1.0 / (T * (1.0 - alpha))) * self.results.xi.sum()
+        logger.info(f"CVaR solution: VaR={self.results.VaR:.4f}, CVaR={self.results.CVaR:.4f}")
 
     def calculate_bids(self, cfg, data_df: pd.DataFrame, features: pd.DataFrame):
         """Calculate the DA and balancing bids using the trained policy (wind-only)."""
@@ -962,10 +1027,8 @@ class ModelClassPolicyWindOnly(ModelHindsightWindOnly):
         self.parameters.pred_labels = pred_labels
 
         opt_params = cfg.experiments.optimization_parameters
-        self.constants.USE_CVAR = opt_params.get("use_cvar_constraint", False)
-        if self.constants.USE_CVAR:
-            self.constants.CVAR_ALPHA = opt_params.get("cvar_alpha", 0.95)
-            self.constants.CVAR_LIMIT = opt_params.get("cvar_limit", 0.0)
+        self.constants.CVAR_ALPHA = opt_params.get("cvar_alpha", 0.95)
+        self.constants.CVAR_BETA = opt_params.get("cvar_beta", 0.5)
 
     def _set_variables(self):
         super()._set_variables()
@@ -989,30 +1052,39 @@ class ModelClassPolicyWindOnly(ModelHindsightWindOnly):
             dims=["feature"],
             coords={"feature": self.constants.FEATURE_DIM}
         )
-        if self.constants.USE_CVAR:
-            self.model.add_variables(name="VaR")
-            self.model.add_variables(
-                lower=0,
-                name="xi",
-                dims=["datetime"],
-                coords={"datetime": self.constants.T}
-            )
+        self.model.add_variables(name="VaR")
+        self.model.add_variables(
+            lower=0,
+            name="xi",
+            dims=["datetime"],
+            coords={"datetime": self.constants.T}
+        )
 
-    def _set_cvar_constraints(self):
+    def _set_objective(self):
+        base_profit = (
+            (self.model.variables["p_DA"] * self.parameters.lambda_DA_hat).sum()
+            + (self.model.variables["p_B"] * self.parameters.lambda_B_hat).sum()
+        )
         T = len(self.constants.T)
         alpha = self.constants.CVAR_ALPHA
-        price_diff = self.parameters.lambda_DA_hat - self.parameters.lambda_B_hat
+        beta = self.constants.CVAR_BETA
+        cvar = self.model.variables["VaR"] - (1.0 / (T * (1.0 - alpha))) * self.model.variables["xi"].sum()
+        self.model.add_objective(beta * base_profit + (1.0 - beta) * cvar, sense="max")
+
+    def _set_cvar_constraints(self):
+        """Adds auxiliary CVaR variable constraints (Rockafellar-Uryasev form) for the objective.
+
+        xi[t] >= VaR - profit_t, xi[t] >= 0, where profit_t is total per-period profit.
+        """
+        profit_t = (
+            self.model.variables["p_DA"] * self.parameters.lambda_DA_hat
+            + self.model.variables["p_B"] * self.parameters.lambda_B_hat
+        )
         self.model.add_constraints(
-            self.model.variables["xi"] >= price_diff * self.model.variables["p_B"] - self.model.variables["VaR"],
+            self.model.variables["xi"] >= self.model.variables["VaR"] - profit_t,
             name="cvar_xi"
         )
-        self.model.add_constraints(
-            self.model.variables["VaR"]
-            + (1.0 / (T * (1.0 - alpha))) * self.model.variables["xi"].sum()
-            <= self.constants.CVAR_LIMIT,
-            name="cvar_limit"
-        )
-        logger.info(f"CVaR constraint added: alpha={alpha}, limit={self.constants.CVAR_LIMIT}")
+        logger.info(f"CVaR objective term added: alpha={self.constants.CVAR_ALPHA}, beta={self.constants.CVAR_BETA}")
 
     def _set_constraints(self):
         super()._set_constraints()
@@ -1050,8 +1122,7 @@ class ModelClassPolicyWindOnly(ModelHindsightWindOnly):
             self.model.variables["p_DA"] - self.model.variables["z"] == self.parameters.P_W_tilde,
             name="bid_adjustment"
         )
-        if self.constants.USE_CVAR:
-            self._set_cvar_constraints()
+        self._set_cvar_constraints()
 
         logger.debug(f"X_features shape: {self.parameters.X_features.shape}")
         logger.debug(f"q shape: {self.model.variables['q_1'].shape}")
@@ -1064,13 +1135,12 @@ class ModelClassPolicyWindOnly(ModelHindsightWindOnly):
         self.results.q_0 = self.model.variables["q_0"].solution.to_pandas()
         self.results.q_1 = self.model.variables["q_1"].solution.to_pandas()
         self.results.q_2 = self.model.variables["q_2"].solution.to_pandas()
-        if self.constants.USE_CVAR:
-            self.results.VaR = self.model.variables["VaR"].solution.item()
-            self.results.xi = self.model.variables["xi"].solution.to_pandas()
-            alpha = self.constants.CVAR_ALPHA
-            T = len(self.constants.T)
-            self.results.CVaR = self.results.VaR + (1.0 / (T * (1.0 - alpha))) * self.results.xi.sum()
-            logger.info(f"CVaR solution: VaR={self.results.VaR:.4f}, CVaR={self.results.CVaR:.4f}")
+        self.results.VaR = self.model.variables["VaR"].solution.item()
+        self.results.xi = self.model.variables["xi"].solution.to_pandas()
+        alpha = self.constants.CVAR_ALPHA
+        T = len(self.constants.T)
+        self.results.CVaR = self.results.VaR - (1.0 / (T * (1.0 - alpha))) * self.results.xi.sum()
+        logger.info(f"CVaR solution: VaR={self.results.VaR:.4f}, CVaR={self.results.CVaR:.4f}")
 
     def calculate_bids(self, cfg, data_df: pd.DataFrame, features: pd.DataFrame, preds_df: pd.DataFrame):
         """Calculate the DA and balancing bids using the trained class policy (wind-only)."""
@@ -1218,6 +1288,65 @@ class ModelAllOrNothingWindOnly(ModelHindsightWindOnly):
 
         p_B = P_W_hat - p_DA
         return p_DA, p_B
+
+
+class ModelHindsightPrimeWindOnly(ModelHindsightWindOnly):
+    """Hindsight wind-only model that forces wind forecast bid for label 2, free hindsight for labels 0 and 1."""
+    def __init__(
+            self,
+            cfg: DictConfig,
+            lambda_DA_hat: pd.Series,
+            lambda_B_hat: pd.Series,
+            P_W_hat: pd.Series,
+            P_W_tilde: pd.Series,
+            X_features: pd.DataFrame,
+            pred_labels: pd.Series,
+            **kwargs,
+        ):
+        super().__init__(cfg, lambda_DA_hat, lambda_B_hat, P_W_hat, **kwargs)
+        assert lambda_DA_hat.index.equals(pred_labels.index)
+        assert lambda_DA_hat.index.equals(P_W_tilde.index)
+        self.parameters.pred_labels = pred_labels
+        self.parameters.P_W_tilde = xr.DataArray(
+            P_W_tilde.values,
+            dims=["datetime"],
+            coords={
+                "datetime": self.constants.T,
+                "day": ("datetime", self.constants.D)
+            }
+        )
+
+    def _set_constraints(self):
+        super()._set_constraints()
+        mask = (self.parameters.pred_labels == 2).values
+        if mask.sum() > 0:
+            self.model.add_constraints(
+                self.model.variables["p_DA"][mask] == self.parameters.P_W_tilde[mask],
+                name="bid_forecast"
+            )
+
+    def calculate_bids(self, cfg, data_df: pd.DataFrame, features: pd.DataFrame, preds_df: pd.DataFrame):
+        """Solve hindsight-prime optimization on test data: label-2 fixed to wind forecast, others free."""
+        lambda_DA_hat = data_df[cfg.datasets.optimization.lambda_DA_hat]
+        lambda_B_hat = data_df[cfg.datasets.optimization.lambda_B_hat]
+        P_W_hat = data_df[cfg.datasets.optimization.P_W_hat]
+        P_W_tilde = data_df[cfg.datasets.optimization.P_W_tilde]
+        pred_labels = preds_df["thresholded_label"]
+
+        test_optimizer = ModelHindsightPrimeWindOnly(
+            cfg=cfg,
+            lambda_DA_hat=lambda_DA_hat,
+            lambda_B_hat=lambda_B_hat,
+            P_W_hat=P_W_hat,
+            P_W_tilde=P_W_tilde,
+            X_features=features,
+            pred_labels=pred_labels,
+        )
+        test_optimizer.build_model()
+        test_optimizer.run_optimization()
+        if test_optimizer.results.status != "ok":
+            logger.warning(f"Hindsight prime test optimization did not converge. Status: {test_optimizer.results.status}")
+        return test_optimizer.results.p_DA, test_optimizer.results.p_B
 
 
 @hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev")

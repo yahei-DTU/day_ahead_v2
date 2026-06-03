@@ -111,7 +111,6 @@ def threshold_predictions(cfg, proba: np.ndarray, alpha: float) -> pd.DataFrame:
 
     Args:
         cfg: Configuration object.
-        model: Trained model with predict method.
         proba (np.ndarray): Predicted probabilities for each class. Shape (n_samples, n_classes).
         alpha (float): Decision threshold for assigning class labels.
 

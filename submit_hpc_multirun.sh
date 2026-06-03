@@ -1,6 +1,6 @@
 #!/bin/bash
 #BSUB -q hpc
-#BSUB -J multirun[1-5]
+#BSUB -J multirun[1-4]
 #BSUB -n 8
 #BSUB -W 10:00
 #BSUB -u yahei@dtu.dk
@@ -13,11 +13,8 @@
 # MODELS=(logistic_regression lightgbm xgboost mlp)
 # MODEL=${MODELS[$((LSB_JOBINDEX - 1))]}
 EXPERIMENTS=(
-feature_tuning_exp1
-feature_tuning_exp2
-feature_tuning_exp3
-feature_tuning_exp4
-feature_tuning_exp5
+alpha_tuning_exp3_hpp alpha_tuning_exp3_windonly
+alpha_tuning_exp4_hpp alpha_tuning_exp4_windonly
 )
 EXPERIMENT=${EXPERIMENTS[$((LSB_JOBINDEX - 1))]}
 
