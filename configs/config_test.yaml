@@ -1,7 +1,7 @@
 defaults:
   - datasets: data2025
   - models: lightgbm
-  - experiments: alpha_tuning_exp3_windonly
+  - experiments: alpha_tuning_exp4_hpp
   - _self_
 
 project_root: "${hydra:runtime.cwd}"

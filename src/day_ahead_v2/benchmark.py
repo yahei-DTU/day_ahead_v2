@@ -98,12 +98,15 @@ def main(cfg):
     all_results_hindsight     = []
     all_results_policy        = []
     all_results_bid_forecast  = []
+    all_results_bid_max       = []
     all_train_results_dfs_hindsight    = pd.DataFrame()
     all_test_results_dfs_hindsight     = pd.DataFrame()
     all_train_results_dfs_policy       = pd.DataFrame()
     all_test_results_dfs_policy        = pd.DataFrame()
     all_train_results_dfs_bid_forecast = pd.DataFrame()
     all_test_results_dfs_bid_forecast  = pd.DataFrame()
+    all_train_results_dfs_bid_max      = pd.DataFrame()
+    all_test_results_dfs_bid_max       = pd.DataFrame()
 
     for window in windows:
 
@@ -208,15 +211,11 @@ def main(cfg):
             "lambda_DA_hat": lambda_DA_hat_test, "lambda_B_hat": lambda_B_hat_test,
         }, index=data_test.index)
 
-        imbalance_cost_train = (lambda_DA_hat_train - lambda_B_hat_train) * p_B_train
-        imbalance_cost_test  = (lambda_DA_hat_test  - lambda_B_hat_test)  * p_B_test
         all_results_hindsight.append({
             "train_profit_total": profit_train.sum(), "train_profit_mean": profit_train.mean(),
-            "train_imbalance_cost_mean": imbalance_cost_train.mean(),
-            "train_imbalance_cost_cvar": imbalance_cost_train[imbalance_cost_train >= np.percentile(imbalance_cost_train, 95)].mean(),
+            "train_profit_cvar": profit_train[profit_train >= np.percentile(profit_train, 95)].mean(),
             "test_profit_total":  profit_test.sum(),  "test_profit_mean":  profit_test.mean(),
-            "test_imbalance_cost_mean": imbalance_cost_test.mean(),
-            "test_imbalance_cost_cvar": imbalance_cost_test[imbalance_cost_test >= np.percentile(imbalance_cost_test, 95)].mean(),
+            "test_profit_cvar": profit_test[profit_test >= np.percentile(profit_test, 95)].mean(),
             "train_start": train_start, "train_end": train_end,
             "valid_start": valid_start, "valid_end": valid_end,
             "test_start":  test_start,  "test_end":  test_end,
@@ -265,22 +264,15 @@ def main(cfg):
             "lambda_DA_hat": lambda_DA_hat_test, "lambda_B_hat": lambda_B_hat_test,
         }, index=data_test.index)
 
-        imbalance_cost_train = (lambda_DA_hat_train - lambda_B_hat_train) * p_B_train
-        imbalance_cost_test  = (lambda_DA_hat_test  - lambda_B_hat_test)  * p_B_test
         all_results_policy.append({
             "train_profit_total": profit_train.sum(), "train_profit_mean": profit_train.mean(),
-            "train_profit_cvar":  profit_train[profit_train <= np.percentile(profit_train, 5)].mean(),
-            "train_imbalance_cost_mean": imbalance_cost_train.mean(),
-            "train_imbalance_cost_cvar": imbalance_cost_train[imbalance_cost_train >= np.percentile(imbalance_cost_train, 95)].mean(),
+            "train_profit_cvar": profit_train[profit_train >= np.percentile(profit_train, 95)].mean(),
             "test_profit_total":  profit_test.sum(),  "test_profit_mean":  profit_test.mean(),
-            "test_profit_cvar":   profit_test[profit_test <= np.percentile(profit_test, 5)].mean(),
-            "test_imbalance_cost_mean": imbalance_cost_test.mean(),
-            "test_imbalance_cost_cvar": imbalance_cost_test[imbalance_cost_test >= np.percentile(imbalance_cost_test, 95)].mean(),
+            "test_profit_cvar": profit_test[profit_test >= np.percentile(profit_test, 95)].mean(),
             "train_start": train_start, "train_end": train_end,
             "valid_start": valid_start, "valid_end": valid_end,
             "test_start":  test_start,  "test_end":  test_end,
             "lambda_H": h2_price,
-            "CVaR": single_policy_train.results.CVaR if hasattr(single_policy_train.results, "CVaR") else np.nan,
         })
         all_train_results_dfs_policy = pd.concat([all_train_results_dfs_policy, results_policy_train_df])
         all_test_results_dfs_policy  = pd.concat([all_test_results_dfs_policy,  results_policy_test_df])
@@ -321,15 +313,11 @@ def main(cfg):
             "lambda_DA_hat": lambda_DA_hat_test, "lambda_B_hat": lambda_B_hat_test,
         }, index=data_test.index)
 
-        imbalance_cost_train = (lambda_DA_hat_train - lambda_B_hat_train) * p_B_train
-        imbalance_cost_test  = (lambda_DA_hat_test  - lambda_B_hat_test)  * p_B_test
         all_results_bid_forecast.append({
             "train_profit_total": profit_train.sum(), "train_profit_mean": profit_train.mean(),
-            "train_imbalance_cost_mean": imbalance_cost_train.mean(),
-            "train_imbalance_cost_cvar": imbalance_cost_train[imbalance_cost_train >= np.percentile(imbalance_cost_train, 95)].mean(),
+            "train_profit_cvar": profit_train[profit_train >= np.percentile(profit_train, 95)].mean(),
             "test_profit_total":  profit_test.sum(),  "test_profit_mean":  profit_test.mean(),
-            "test_imbalance_cost_mean": imbalance_cost_test.mean(),
-            "test_imbalance_cost_cvar": imbalance_cost_test[imbalance_cost_test >= np.percentile(imbalance_cost_test, 95)].mean(),
+            "test_profit_cvar": profit_test[profit_test >= np.percentile(profit_test, 95)].mean(),
             "train_start": train_start, "train_end": train_end,
             "valid_start": valid_start, "valid_end": valid_end,
             "test_start":  test_start,  "test_end":  test_end,
@@ -339,35 +327,78 @@ def main(cfg):
         all_test_results_dfs_bid_forecast  = pd.concat([all_test_results_dfs_bid_forecast,  results_bid_forecast_test_df])
         del p_DA_train, p_B_train, p_H_train, h_train, profit_train, p_DA_test, p_B_test, p_H_test, h_test, profit_test
 
+        # ---------------------------------------------- Model 4 - Always bid max ----------------------------------------------
+        logger.debug("Running Always Bid Max Model...")
+        if is_hpp:
+            p_DA_train = pd.Series(cfg.experiments.optimization_parameters.wind_capacity, index=data_train.index)
+            p_DA_train[lambda_DA_hat_train < 0] = -cfg.experiments.optimization_parameters.electrolyzer_capacity
+            p_B_train, p_H_train, h_train = calculate_hydrogen_balancing_bids(cfg, p_DA_train, lambda_B_hat_train, P_W_hat_train)
+            p_DA_test = pd.Series(cfg.experiments.optimization_parameters.wind_capacity, index=data_test.index)
+            p_DA_test[lambda_DA_hat_test < 0] = -cfg.experiments.optimization_parameters.electrolyzer_capacity
+            p_B_test, p_H_test, h_test = calculate_hydrogen_balancing_bids(cfg, p_DA_test, lambda_B_hat_test, P_W_hat_test)
+        else:
+            p_DA_train = pd.Series(cfg.experiments.optimization_parameters.wind_capacity, index=data_train.index)
+            p_DA_train[lambda_DA_hat_train < 0] = 0.0
+            p_B_train  = P_W_hat_train - p_DA_train
+            p_H_train  = pd.Series(0.0, index=p_DA_train.index)
+            h_train    = pd.Series(0.0, index=p_DA_train.index)
+            p_DA_test  = pd.Series(cfg.experiments.optimization_parameters.wind_capacity, index=data_test.index)
+            p_DA_test[lambda_DA_hat_test < 0] = 0.0
+            p_B_test   = P_W_hat_test - p_DA_test
+            p_H_test   = pd.Series(0.0, index=p_DA_test.index)
+            h_test     = pd.Series(0.0, index=p_DA_test.index)
+
+        profit_train = calculate_profit(p_DA_train, h_train, p_B_train, lambda_DA_hat_train, h2_price, lambda_B_hat_train)
+        profit_test  = calculate_profit(p_DA_test,  h_test,  p_B_test,  lambda_DA_hat_test,  h2_price, lambda_B_hat_test)
+
+        results_bid_max_train_df = pd.DataFrame({
+            "p_DA": p_DA_train, "p_B": p_B_train, "p_H": p_H_train, "h": h_train,
+            "profit": profit_train, "P_W_hat": P_W_hat_train, "P_W_tilde": P_W_tilde_train,
+            "lambda_DA_hat": lambda_DA_hat_train, "lambda_B_hat": lambda_B_hat_train,
+        }, index=data_train.index)
+        results_bid_max_test_df = pd.DataFrame({
+            "p_DA": p_DA_test, "p_B": p_B_test, "p_H": p_H_test, "h": h_test,
+            "profit": profit_test, "P_W_hat": P_W_hat_test, "P_W_tilde": P_W_tilde_test,
+            "lambda_DA_hat": lambda_DA_hat_test, "lambda_B_hat": lambda_B_hat_test,
+        }, index=data_test.index)
+
+        all_results_bid_max.append({
+            "train_profit_total": profit_train.sum(), "train_profit_mean": profit_train.mean(),
+            "train_profit_cvar": profit_train[profit_train >= np.percentile(profit_train, 95)].mean(),
+            "test_profit_total":  profit_test.sum(),  "test_profit_mean":  profit_test.mean(),
+            "test_profit_cvar": profit_test[profit_test >= np.percentile(profit_test, 95)].mean(),
+            "train_start": train_start, "train_end": train_end,
+            "valid_start": valid_start, "valid_end": valid_end,
+            "test_start":  test_start,  "test_end":  test_end,
+            "lambda_H": h2_price,
+        })
+        all_train_results_dfs_bid_max = pd.concat([all_train_results_dfs_bid_max, results_bid_max_train_df])
+        all_test_results_dfs_bid_max  = pd.concat([all_test_results_dfs_bid_max,  results_bid_max_test_df])
+        del p_DA_train, p_B_train, p_H_train, h_train, profit_train, p_DA_test, p_B_test, p_H_test, h_test, profit_test
+
     # ---------------------------------------------
     # Aggregate metrics
     # ---------------------------------------------
     def _agg_split(train_df, test_df):
         def _stats(p):
             return p.sum(), p.mean(), p.std(), p[p <= np.percentile(p, 5)].mean()
-        def _ic_stats(df):
-            ic = (df["lambda_DA_hat"] - df["lambda_B_hat"]) * df["p_B"]
-            return ic.mean(), ic[ic >= np.percentile(ic, 95)].mean()
+
         tr_tot, tr_mean, tr_std, tr_cvar = _stats(train_df["profit"])
         te_tot, te_mean, te_std, te_cvar = _stats(test_df["profit"])
-        tr_ic_mean, tr_ic_cvar = _ic_stats(train_df)
-        te_ic_mean, te_ic_cvar = _ic_stats(test_df)
+
         return {
             "train_profit_total": tr_tot,
             "train_profit_mean":  f"{tr_mean:.2f} ± {tr_std:.2f}",
             "train_profit_cvar":  tr_cvar,
-            "train_imbalance_cost_mean": tr_ic_mean,
-            "train_imbalance_cost_cvar": tr_ic_cvar,
             "test_profit_total":  te_tot,
             "test_profit_mean":   f"{te_mean:.2f} ± {te_std:.2f}",
             "test_profit_cvar":   te_cvar,
-            "test_imbalance_cost_mean": te_ic_mean,
-            "test_imbalance_cost_cvar": te_ic_cvar,
         }
 
     avg_metrics_hindsight    = _agg_split(all_train_results_dfs_hindsight,    all_test_results_dfs_hindsight)
     avg_metrics_policy       = _agg_split(all_train_results_dfs_policy,       all_test_results_dfs_policy)
     avg_metrics_bid_forecast = _agg_split(all_train_results_dfs_bid_forecast, all_test_results_dfs_bid_forecast)
+    avg_metrics_bid_max      = _agg_split(all_train_results_dfs_bid_max,      all_test_results_dfs_bid_max)
 
     # ---------------------------------------------
     # Save results
@@ -379,6 +410,7 @@ def main(cfg):
         ("hindsight",     all_results_hindsight,    avg_metrics_hindsight,    all_train_results_dfs_hindsight,    all_test_results_dfs_hindsight),
         ("single_policy", all_results_policy,       avg_metrics_policy,       all_train_results_dfs_policy,       all_test_results_dfs_policy),
         ("bid_forecast",  all_results_bid_forecast, avg_metrics_bid_forecast, all_train_results_dfs_bid_forecast, all_test_results_dfs_bid_forecast),
+        ("bid_max",       all_results_bid_max,      avg_metrics_bid_max,      all_train_results_dfs_bid_max,      all_test_results_dfs_bid_max),
     ]:
         sp = save_path / name / cfg.datasets.dataset_name
         sp.mkdir(parents=True, exist_ok=True)

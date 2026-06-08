@@ -613,6 +613,19 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> Non
 
     final_model = train_batch(cfg, X_train_full, y_train_full, best_params, sample_weight=sample_weight_full)
 
+    try:
+        booster = final_model.booster_
+        fig, ax = plt.subplots(figsize=(10, max(6, len(booster.feature_name()) // 3)))
+        lgb.plot_importance(booster, importance_type="gain", ax=ax, title="Feature importance (gain)")
+        plt.tight_layout()
+        fi_path = Path(cfg.project_root) / "models" / "feature_importance.png"
+        fi_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(fi_path)
+        plt.close(fig)
+        logger.info(f"Feature importance plot saved to {fi_path}")
+    except Exception as e:
+        logger.warning(f"Could not save feature importance plot: {e}")
+
     # ---------------------------------------------
     # Final test evaluation
     # ---------------------------------------------
