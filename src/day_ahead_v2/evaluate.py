@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import linopy
-from sklearn.metrics import accuracy_score, roc_auc_score, f1_score
+from sklearn.metrics import accuracy_score, roc_auc_score, f1_score, recall_score
 from typing import Dict, Tuple
 from types import SimpleNamespace
 import xarray as xr
@@ -96,6 +96,15 @@ def compute_accuracy_f1(y_true: pd.Series, y_pred: pd.Series, y_score: pd.Series
         metrics["f1_score"] = np.nan
         logger.warning("F1 score could not be computed due to a ValueError.")
 
+    try:
+        per_class_recall = recall_score(y_true, y_pred, average=None, labels=[0, 1], zero_division=np.nan)
+        metrics["accuracy_class_0"] = per_class_recall[0]
+        metrics["accuracy_class_1"] = per_class_recall[1]
+    except ValueError:
+        metrics["accuracy_class_0"] = np.nan
+        metrics["accuracy_class_1"] = np.nan
+        logger.warning("Per-class accuracy could not be computed due to a ValueError.")
+
     if y_score is not None:
         try:
             metrics["roc_auc"] = roc_auc_score(y_true, y_score)
@@ -105,41 +114,49 @@ def compute_accuracy_f1(y_true: pd.Series, y_pred: pd.Series, y_score: pd.Series
 
     return metrics
 
-def threshold_predictions(cfg, proba: np.ndarray, alpha: float) -> pd.DataFrame:
+def threshold_predictions(cfg, proba: np.ndarray, alpha_0: float, alpha_1: float) -> pd.DataFrame:
     """
-    Make predictions using the trained model.
+    Make predictions using asymmetric decision thresholds.
+
+    For binary probabilities (column 1 = P(class 1)):
+        - predict class 1 if P(class 1) >= alpha_1,
+        - predict class 0 if P(class 1) <= alpha_0,
+        - otherwise mark the sample uncertain (-> fallback_class).
+
+    The symmetric single-threshold case is recovered with
+    alpha_0 = 1 - alpha and alpha_1 = alpha.
 
     Args:
         cfg: Configuration object.
-        proba (np.ndarray): Predicted probabilities for each class. Shape (n_samples, n_classes).
-        alpha (float): Decision threshold for assigning class labels.
+        proba (np.ndarray): Predicted probabilities. Shape (n_samples, 2), columns
+            ordered by ascending class label so column 1 is P(class 1).
+        alpha_0 (float): Lower threshold in [0, 0.5]; predict class 0 if P(class 1) <= alpha_0.
+        alpha_1 (float): Upper threshold in [0.5, 1.0]; predict class 1 if P(class 1) >= alpha_1.
 
     Returns:
         pd.DataFrame: DataFrame with predicted class labels and uncertainty flag.
     """
-    logger.info(f"Applying decision threshold alpha={alpha} for predictions.")
-    preds = np.zeros_like(proba, dtype=int)
+    logger.info(f"Applying asymmetric decision thresholds alpha_0={alpha_0}, alpha_1={alpha_1} for predictions.")
+    if proba.shape[1] != 2:
+        raise ValueError(
+            f"Asymmetric thresholding expects binary probabilities (2 columns), got {proba.shape[1]}."
+        )
     n_samples = proba.shape[0]
+    p1 = proba[:, 1]
 
-    uncertain = np.zeros(n_samples, dtype=bool)
-    for i in range(n_samples):
-        argmax = proba[i].argmax()
-        preds[i, argmax] = 1  # Assign predicted class based on highest probability
-        if proba[i, argmax] < alpha:
-            uncertain[i] = True
-
-    preds = preds.argmax(axis=1)
-    # if uncertain set to fallback class
     fallback_class = cfg.datasets.training.fallback_class
-    preds[uncertain] = fallback_class
-    logger.info(f"Total uncertain predictions: {uncertain.sum()} out of {n_samples} ({(uncertain.sum() / n_samples) * 100:.2f}%) -  (alpha={alpha})")
+    preds = np.full(n_samples, fallback_class, dtype=int)
+    preds[p1 >= alpha_1] = 1
+    preds[p1 <= alpha_0] = 0
+    uncertain = (p1 > alpha_0) & (p1 < alpha_1)
+    logger.info(f"Total uncertain predictions: {uncertain.sum()} out of {n_samples} ({(uncertain.sum() / n_samples) * 100:.2f}%) -  (alpha_0={alpha_0}, alpha_1={alpha_1})")
 
     # return df with preds and uncertain flag
     return pd.DataFrame({
         "thresholded_label": preds,
         "predicted_proba": proba.max(axis=1),
         "uncertain": uncertain
-    }, index=range(len(preds)))
+    }, index=range(n_samples))
 
 def calculate_hydrogen_balancing_bids(cfg, p_DA: pd.Series, lambda_B_hat: pd.Series, P_W_hat: pd.Series) -> Tuple[pd.Series, pd.Series, pd.Series]:
     parameters = SimpleNamespace()

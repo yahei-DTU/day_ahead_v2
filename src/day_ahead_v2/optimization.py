@@ -388,7 +388,7 @@ class ModelSinglePolicyHPP(ModelHindsightHPP):
         alpha = self.constants.CVAR_ALPHA
         beta = self.constants.CVAR_BETA
         cvar = self.model.variables["VaR"] - (1.0 / (T * (1.0 - alpha))) * self.model.variables["xi"].sum()
-        self.model.add_objective(beta * base_profit + (1.0 - beta) * cvar, sense="max")
+        self.model.add_objective(beta * (base_profit / T) + (1.0 - beta) * cvar, sense="max")
 
     def _set_cvar_constraints(self):
         """Adds auxiliary CVaR variable constraints (Rockafellar-Uryasev form) for the objective.
@@ -575,7 +575,7 @@ class ModelClassPolicyHPP(ModelHindsightHPP):
         alpha = self.constants.CVAR_ALPHA
         beta = self.constants.CVAR_BETA
         cvar = self.model.variables["VaR"] - (1.0 / (T * (1.0 - alpha))) * self.model.variables["xi"].sum()
-        self.model.add_objective(beta * base_profit + (1.0 - beta) * cvar, sense="max")
+        self.model.add_objective(beta * (base_profit / T) + (1.0 - beta) * cvar, sense="max")
 
     def _set_cvar_constraints(self):
         """Adds auxiliary CVaR variable constraints (Rockafellar-Uryasev form) for the objective.
@@ -890,7 +890,7 @@ class ModelSinglePolicyWindOnly(ModelHindsightWindOnly):
         alpha = self.constants.CVAR_ALPHA
         beta = self.constants.CVAR_BETA
         cvar = self.model.variables["VaR"] - (1.0 / (T * (1.0 - alpha))) * self.model.variables["xi"].sum()
-        self.model.add_objective(beta * base_profit + (1.0 - beta) * cvar, sense="max")
+        self.model.add_objective(beta * (base_profit / T) + (1.0 - beta) * cvar, sense="max")
 
     def _set_cvar_constraints(self):
         """Adds auxiliary CVaR variable constraints (Rockafellar-Uryasev form) for the objective.
@@ -1069,7 +1069,7 @@ class ModelClassPolicyWindOnly(ModelHindsightWindOnly):
         alpha = self.constants.CVAR_ALPHA
         beta = self.constants.CVAR_BETA
         cvar = self.model.variables["VaR"] - (1.0 / (T * (1.0 - alpha))) * self.model.variables["xi"].sum()
-        self.model.add_objective(beta * base_profit + (1.0 - beta) * cvar, sense="max")
+        self.model.add_objective(beta * (base_profit / T) + (1.0 - beta) * cvar, sense="max")
 
     def _set_cvar_constraints(self):
         """Adds auxiliary CVaR variable constraints (Rockafellar-Uryasev form) for the objective.

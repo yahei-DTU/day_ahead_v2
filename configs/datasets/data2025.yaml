@@ -50,6 +50,7 @@ transform:
 training:
   datetime_column: datetime
   target_column: target_classes
+  target_wasserstein: target_continuous
   fallback_class: 2
   feature_columns_fix:
     - sin_hour
