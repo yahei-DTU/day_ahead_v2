@@ -1,7 +1,7 @@
 defaults:
-  - datasets: data2025
+  - datasets: data2025_DK_1
   - models: lightgbm
-  - experiments: wasserstein_exp1
+  - experiments: benchmark_exp1_hpp
   - _self_
 
 project_root: "${hydra:runtime.cwd}"

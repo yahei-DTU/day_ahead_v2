@@ -9,7 +9,7 @@ train_parameters:
   n_jobs: 1 # or -1 for all cores
   feature_selection: true # Whether to perform feature selection
   sample_weighting: false # Whether to weight training samples by abs(lambda_DA_hat - lambda_B_hat)
-  deadband_quantiles: [0.0, 0.1, 0.3, 0.5, 0.7] # Quantile of lowest-spread training samples to drop; 0.0 = no deadband
+  deadband_quantiles: [0.0, 0.3, 0.7] # Quantile of lowest-spread training samples to drop; 0.0 = no deadband
 
 # Model parameters
 experiment_parameters:

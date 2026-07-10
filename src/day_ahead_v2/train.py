@@ -198,6 +198,8 @@ def get_hyperparameter_combinations(cfg: DictConfig) -> list[dict]:
 
     # Include deadband_quantile from train_parameters in the search grid
     deadband_quantiles = cfg.experiments.train_parameters.get("deadband_quantiles", [0.0])
+    if OmegaConf.is_config(deadband_quantiles):
+        deadband_quantiles = OmegaConf.to_container(deadband_quantiles, resolve=True)
     if not isinstance(deadband_quantiles, (list, tuple)):
         deadband_quantiles = [deadband_quantiles]
     param_grid["deadband_quantile"] = list(deadband_quantiles)
@@ -850,11 +852,13 @@ def train_model(cfg: DictConfig, window: dict, data_handler: DataHandler) -> tup
             certain_train_results_df["true_label"],
             certain_train_results_df["thresholded_label"],
             y_score=certain_train_results_df.get("proba_class_1"),
+            fallback_class=cfg.datasets.training.fallback_class,
         )
         metrics_threshold_prediction_test = compute_accuracy_f1(
             certain_test_results_df["true_label"],
             certain_test_results_df["thresholded_label"],
             y_score=certain_test_results_df.get("proba_class_1"),
+            fallback_class=cfg.datasets.training.fallback_class,
         )
 
     # ---------------------------------------------

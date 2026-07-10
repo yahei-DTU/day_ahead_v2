@@ -1,9 +1,9 @@
 # Experiment configuration for Exp1
-experiment_name: "wasserstein_exp1" # Name of the experiment
+experiment_name: "wasserstein_DE_LU_hpp" # Name of the experiment
 
 # Train parameters
 train_parameters:
-  train_length: 180 # Days of training
+  train_length: 120 # Days of training
   valid_length: 30 # Days of validation
   test_length: 7 # Days of testing
   n_jobs: 1 # or -1 for all cores
@@ -24,6 +24,8 @@ experiment_parameters:
   # Wasserstein drift backtest (wasserstein.py) only:
   feature_drift_method: sliced # Feature drift metric: "sliced" (joint structure via random projections) or "marginal" (mean per-feature 1-D distance)
   n_projections: 200 # Number of random projections for the sliced Wasserstein distance
+  joint_target_weight: 1.0
+  deadband_results_path: "reports/alpha_tuning/beta_0.9/alpha_tuning_exp1_hpp/lightgbm/data2025_DE_LU/backtest_results.csv" # Path to the backtest results CSV file for the deadband configuration (used for plotting profit vs. Wasserstein)
 
 # Optimization parameters
 optimization_parameters:

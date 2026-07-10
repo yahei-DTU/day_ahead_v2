@@ -1,0 +1,47 @@
+# Experiment configuration for Exp1
+experiment_name: "wasserstein_DK_1_hpp" # Name of the experiment
+
+# Train parameters
+train_parameters:
+  train_length: 120 # Days of training
+  valid_length: 30 # Days of validation
+  test_length: 7 # Days of testing
+  n_jobs: 1 # or -1 for all cores
+  feature_selection: true # Whether to perform feature selection
+  sample_weighting: false # Whether to weight training samples by abs(lambda_DA_hat - lambda_B_hat)
+  deadband_quantiles: [0.0, 0.1, 0.3, 0.5, 0.7] # Quantile of lowest-spread training samples to drop; 0.0 = no deadband
+
+# Model parameters
+experiment_parameters:
+  start_date: "2025-04-01" # Start date for training
+  end_date: "2026-01-31" # End date for testing 2026-01-31
+  # decision_threshold_alphas: [0.7] # Symmetric thresholds; mapped internally to the pair (1 - alpha, alpha)
+  decision_threshold_alphas_0: [0.45, 0.3, 0.15] # Lower thresholds in [0, 0.5]; predict class 0 if P(class 1) <= alpha_0
+  decision_threshold_alphas_1: [0.55, 0.7, 0.85] # Upper thresholds in [0.5, 1.0]; predict class 1 if P(class 1) >= alpha_1
+  threshold_alpha_tuning: mean_profit # Metric to use for tuning the decision threshold (e.g., "accuracy", "mean_profit", "cvar_profit")
+  scoring_metric: "roc_auc" # Metric to use for hyperparameter tuning (e.g., "accuracy", "f1_score", "roc_auc")
+  mode: "full" # Mode of operation (e.g., "full", "classif_only")
+  # Wasserstein drift backtest (wasserstein.py) only:
+  feature_drift_method: sliced # Feature drift metric: "sliced" (joint structure via random projections) or "marginal" (mean per-feature 1-D distance)
+  n_projections: 200 # Number of random projections for the sliced Wasserstein distance
+  joint_target_weight: 1.0
+  deadband_results_path: "reports/alpha_tuning/beta_0.9/alpha_tuning_exp1_hpp/lightgbm/data2025_DK_1/backtest_results.csv" # Path to the backtest results CSV file for the deadband configuration (used for plotting profit vs. Wasserstein)
+
+# Optimization parameters
+optimization_parameters:
+  portfolio: "hpp" # Portfolio configuration (e.g., "wind_only", "hpp")
+  model: class_policy # Optimization model to use (e.g., "class_policy", "all_or_nothing", "hindsight")
+  electrolyzer_capacity: 3.6 # MW, set to 0 to disable electrolyzer
+  wind_capacity: 7.2 # MW
+  hydrogen_price: 2.0 # EUR/kg
+  electrolyzer_load_min: 0.1 # Minimum load factor for the electrolyzer (10% of capacity)
+  number_of_segments: 2 # Number of linear segments for the hydrogen production function
+  a: [] # Linear segments of hydrogen production function (kg/MWh)
+  b: []
+  minimum_daily_hydrogen: 100 # Minimum daily hydrogen production requirement (kg)
+  cvar_alpha: 0.95 # Confidence level for CVaR
+  cvar_beta: 0.5 # Weight on expected profit and CVaR in the objective function (1.0 = only maximize expected profit, 0.0 = only maximize CVaR)
+
+feature_selection_parameters:
+  shap_cumulative_importance_threshold: 0.6 # Threshold for cumulative importance in SHAP feature selection
+  plot_shap_importance: true # Whether to plot SHAP feature importance

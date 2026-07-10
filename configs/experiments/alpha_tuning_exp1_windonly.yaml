@@ -8,17 +8,17 @@ train_parameters:
   test_length: 7 # Days of testing
   n_jobs: 5 # or -1 for all cores
   feature_selection: true # Whether to perform feature selection
-  sample_weighting: true # Whether to weight training samples by abs(lambda_DA_hat - lambda_B_hat)
-  deadband_quantiles: [0.0] # Quantile of lowest-spread training samples to drop; 0.0 = no deadband
+  sample_weighting: false # Whether to weight training samples by abs(lambda_DA_hat - lambda_B_hat)
+  deadband_quantiles: [0.0, 0.1, 0.3, 0.6, 0.8] # Quantile of lowest-spread training samples to drop; 0.0 = no deadband
 
 # Model parameters
 experiment_parameters:
   start_date: "2025-04-01" # Start date for training
   end_date: "2026-01-31" # End date for testing 2026-01-31
   # decision_threshold_alphas: [0.7, 0.75, 0.8, 0.85] # Symmetric fallback (used only if the two asymmetric lists below are absent)
-  decision_threshold_alphas_0: [0.5, 0.45, 0.4, 0.35, 0.3, 0.25, 0.2, 0.15] # Lower thresholds in [0, 0.5]; predict class 0 if P(class 1) <= alpha_0
-  decision_threshold_alphas_1: [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85] # Upper thresholds in [0.5, 1.0]; predict class 1 if P(class 1) >= alpha_1
-  threshold_alpha_tuning: accuracy # Metric to use for tuning the decision threshold (e.g., "accuracy", "mean_profit", "cvar_profit")
+  decision_threshold_alphas_0: [0.15, 0.25, 0.35, 0.45] # Lower thresholds in [0, 0.5]; predict class 0 if P(class 1) <= alpha_0
+  decision_threshold_alphas_1: [0.55, 0.65, 0.75, 0.85] # Upper thresholds in [0.5, 1.0]; predict class 1 if P(class 1) >= alpha_1
+  threshold_alpha_tuning: mean_profit # Metric to use for tuning the decision threshold (e.g., "accuracy", "mean_profit", "cvar_profit")
   scoring_metric: "roc_auc" # Metric to use for hyperparameter tuning (e.g., "accuracy", "f1_score", "roc_auc")
   mode: "full" # Mode of operation (e.g., "full", "classif_only")
 
@@ -35,7 +35,7 @@ optimization_parameters:
   b: []
   minimum_daily_hydrogen: 100 # Minimum daily hydrogen production requirement (kg)
   cvar_alpha: 0.95 # Confidence level for CVaR
-  cvar_beta: 0.5 # Weight on expected profit and CVaR in the objective function (1.0 = only maximize expected profit, 0.0 = only maximize CVaR)
+  cvar_beta: 0.9 # Weight on expected profit and CVaR in the objective function (1.0 = only maximize expected profit, 0.0 = only maximize CVaR)
 
 feature_selection_parameters:
   shap_cumulative_importance_threshold: 0.6 # Threshold for cumulative importance in SHAP feature selection

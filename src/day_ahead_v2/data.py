@@ -13,6 +13,9 @@ Dependencies: pandas, os, typing, pathlib, data_validation
 
 from pathlib import Path
 import logging
+import os
+from io import StringIO
+from urllib.parse import quote
 from omegaconf import DictConfig, OmegaConf
 import hydra
 import inspect
@@ -20,7 +23,6 @@ from typing import Dict, Any
 import pandas as pd
 from datetime import datetime
 import openmeteo_requests
-import requests_cache
 import json
 from entsoe import EntsoePandasClient, mappings
 import requests
@@ -785,10 +787,8 @@ class OpenMeteoHandler(DataHandler):
             Exception: If the API request fails.
             ValueError: If no 'hourly' variables are specified in parameters.
         """
-        # Setup the Open-Meteo API client with cache and retry on error
-        cache_session = requests_cache.CachedSession('.cache',
-                                                     expire_after=3600)
-        retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
+        # Setup the Open-Meteo API client with retry on error
+        retry_session = retry(requests.Session(), retries=5, backoff_factor=0.2)
         openmeteo = openmeteo_requests.Client(session=retry_session)
 
         try:
@@ -1096,10 +1096,172 @@ class EnerginetHandler(DataHandler):
 
         return df
 
+class NetztransparentHandler(DataHandler):
+    """
+    A class to import data from the Netztransparenz.de WebAPI.
+
+    The Netztransparenz WebAPI is jointly operated by the four German TSOs
+    (50Hertz, Amprion, TenneT, TransnetBW). Access uses an OAuth2
+    client-credentials flow: a short-lived bearer token is requested from the
+    identity service and then used to query the data service. Data endpoints
+    return semicolon-separated CSV using German number formatting (comma as the
+    decimal separator), which is parsed into a pandas DataFrame.
+
+    Credentials (ClientID/ClientSecret) are created in the WebAPI portal and are
+    read from the ``IPNT_CLIENT_ID`` / ``IPNT_CLIENT_SECRET`` environment
+    variables by default, or can be passed directly.
+
+    Swagger:
+        https://extranet.netztransparenz.de/DesktopModules/LotesDataManagementExtranet/Swagger/index.html?version=public
+
+    Attributes:
+        endpoint (str): Data path after ``/api/v1/data/`` (e.g. "prognose/solar").
+        start (pd.Timestamp | datetime | str | None): Start of the time range.
+        end (pd.Timestamp | datetime | str | None): End of the time range.
+        read_args (Dict[str, Any]): Extra keyword arguments for ``pd.read_csv``.
+    """
+
+    TOKEN_URL = "https://identity.netztransparenz.de/users/connect/token"
+    BASE_URL = "https://ds.netztransparenz.de/api/v1"
+
+    def __init__(
+        self,
+        endpoint: str,
+        start: pd.Timestamp | datetime | str | None = None,
+        end: pd.Timestamp | datetime | str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        read_args: dict | None = None,
+    ) -> None:
+        super().__init__()
+        self.endpoint = endpoint.strip("/")
+        self.start = start
+        self.end = end
+        self.client_id = client_id or os.getenv("IPNT_CLIENT_ID")
+        self.client_secret = client_secret or os.getenv("IPNT_CLIENT_SECRET")
+        self.read_args: Dict[str, Any] = dict(read_args or {})
+        self._data: pd.DataFrame = self._fetch_data()
+
+    @staticmethod
+    def _format_date(value: pd.Timestamp | datetime | str) -> str:
+        """
+        Format a date as the API expects: ``YYYY-MM-DDTHH:MM:SS`` (no timezone).
+
+        Args:
+            value: Date to format (Timestamp, datetime or parseable string).
+
+        Returns:
+            str: ISO-like datetime string without timezone offset.
+        """
+        return pd.Timestamp(value).strftime("%Y-%m-%dT%H:%M:%S")
+
+    def _get_access_token(self) -> str:
+        """
+        Obtain an OAuth2 access token via the client-credentials grant.
+
+        Returns:
+            str: A bearer access token (valid ~1 hour).
+
+        Raises:
+            ValueError: If credentials are missing.
+            Exception: If the token request fails or returns no token.
+        """
+        if not self.client_id or not self.client_secret:
+            raise ValueError(
+                "Netztransparenz API credentials missing. Set IPNT_CLIENT_ID and "
+                "IPNT_CLIENT_SECRET environment variables, or pass client_id and "
+                "client_secret."
+            )
+
+        logger.info("Requesting Netztransparenz access token...")
+        response = requests.post(
+            self.TOKEN_URL,
+            data={
+                "grant_type": "client_credentials",
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+            },
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            raise Exception(
+                f"Failed to obtain Netztransparenz access token "
+                f"(status {response.status_code}): {response.text}"
+            )
+
+        token = response.json().get("access_token")
+        if not token:
+            raise Exception(
+                "No access_token returned by the Netztransparenz identity service."
+            )
+        return token
+
+    def _fetch_data(self) -> pd.DataFrame:
+        """
+        Fetch data from the Netztransparenz API and return it as a DataFrame.
+
+        Builds the request URL as
+        ``/api/v1/data/{endpoint}/{dateFrom}/{dateTo}`` (the date range is
+        appended only when both ``start`` and ``end`` are provided), sends the
+        bearer token and parses the CSV response.
+
+        Returns:
+            pd.DataFrame: Data fetched from the API (empty if no content).
+
+        Raises:
+            Exception: If the API request fails.
+        """
+        token = self._get_access_token()
+
+        url = f"{self.BASE_URL}/data/{self.endpoint}"
+        if self.start is not None and self.end is not None:
+            date_from = quote(self._format_date(self.start), safe="")
+            date_to = quote(self._format_date(self.end), safe="")
+            url = f"{url}/{date_from}/{date_to}"
+
+        logger.info("Fetching data from Netztransparenz API: %s", url)
+        response = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=120,
+        )
+
+        if response.status_code != 200:
+            raise Exception(
+                f"Netztransparenz API request failed with status "
+                f"{response.status_code}: {response.text}"
+            )
+
+        # A handful of endpoints reply with JSON; data endpoints return CSV.
+        content_type = response.headers.get("Content-Type", "")
+        if "json" in content_type.lower():
+            return pd.json_normalize(response.json())
+
+        text = response.text
+        if not text.strip():
+            logger.warning("Netztransparenz API returned an empty response for %s", url)
+            return pd.DataFrame()
+
+        # German CSV: ';' separator and ',' as decimal separator.
+        read_args = {"sep": ";", "decimal": ",", **self.read_args}
+        return pd.read_csv(StringIO(text), **read_args)
+
 def _to_iso(value):
     if isinstance(value, (pd.Timestamp, datetime)):
         return value.isoformat()
     return str(value)
+
+def _ensure_save_dir(save_dir: str | None) -> Path:
+    """Resolve ``save_dir`` and create it if it does not exist.
+
+    Relative paths are anchored to the project root, matching ``DataHandler.save``.
+    """
+    save_dir = Path(save_dir) if save_dir else Path.cwd()
+    if not save_dir.is_absolute():
+        save_dir = Path(__file__).resolve().parent.parent.parent / save_dir
+    save_dir.mkdir(parents=True, exist_ok=True)
+    return save_dir
 
 @hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev.yaml")
 def pull_openmeteo(cfg: DictConfig) -> None:
@@ -1107,6 +1269,7 @@ def pull_openmeteo(cfg: DictConfig) -> None:
     API_URL = cfg.datasets.get("api_url")
     weather_data = OpenMeteoHandler(API_URL, **params)
     save_dir = cfg.datasets.get("savepath")
+    _ensure_save_dir(save_dir)
     savename = "openmeteo.csv"
     weather_data.save(savename=savename, save_dir=save_dir, index=False)
 
@@ -1120,6 +1283,7 @@ def pull_entsoe(cfg: DictConfig) -> None:
     BZN =  cfg.datasets.get("BZN")
     queries = list(cfg.datasets.get("queries").keys())
     save_dir = cfg.datasets.get("savepath")
+    _ensure_save_dir(save_dir)
     include_neighbours = cfg.datasets.get("include_neighbours", False)
     kwargs = dict(
         start=pd.Timestamp(cfg.datasets.get("start_date"), tz="UTC"),
@@ -1155,6 +1319,7 @@ def pull_entsoe(cfg: DictConfig) -> None:
 def pull_energinet(cfg: DictConfig) -> None:
     requests = cfg.datasets.get("requests")
     save_dir = cfg.datasets.get("savepath")
+    _ensure_save_dir(save_dir)
 
     if requests:
         for dataset_name in requests:
@@ -1172,5 +1337,33 @@ def pull_energinet(cfg: DictConfig) -> None:
             energinet_handler.save(savename=savename, save_dir=save_dir, index=False)
 
 
+@hydra.main(version_base="1.3", config_path="../../configs", config_name="config_dev.yaml")
+def pull_netztransparenz(cfg: DictConfig) -> None:
+    requests_cfg = cfg.datasets.get("requests")
+    save_dir = cfg.datasets.get("savepath")
+
+    if not requests_cfg:
+        logger.warning("No 'requests' specified in the Netztransparenz dataset config.")
+        return
+
+    for name, kwargs in requests_cfg.items():
+        kwargs = dict(kwargs or {})
+        endpoint = kwargs.pop("endpoint", None)
+        if endpoint is None:
+            logger.error(f"Skipping '{name}': no 'endpoint' specified.")
+            continue
+        logger.info(f"Starting data import for '{name}' (endpoint='{endpoint}') with args: {kwargs}")
+        try:
+            netztransparenz_handler = NetztransparentHandler(
+                endpoint=endpoint,
+                **kwargs,
+            )
+        except Exception as e:
+            logger.error(f"Failed to fetch data for '{name}': {e}")
+            continue
+        savename = f"{name}.csv"
+        netztransparenz_handler.save(savename=savename, save_dir=save_dir, index=False)
+
+
 if __name__ == "__main__":
-    pull_entsoe()
+    pull_openmeteo()

@@ -340,7 +340,7 @@ class ModelSinglePolicyHPP(ModelHindsightHPP):
         X_features["lambda_DA_hat"] = (lambda_DA_hat - self._lambda_DA_mean) / self._lambda_DA_std
         # Zero out near-zero values so they are dropped from the sparse LP matrix,
         # preventing extreme coefficient ranges from z-scored features near their mean.
-        X_features = X_features.where(X_features.abs() >= 1e-4, other=0.0)
+        X_features = X_features.where(X_features.abs() >= 1e-3, other=0.0)
         feature_dim = X_features.columns.tolist()
         self.constants.FEATURE_DIM = feature_dim
         self.parameters.X_features = xr.DataArray(
@@ -515,7 +515,7 @@ class ModelClassPolicyHPP(ModelHindsightHPP):
         X_features["lambda_DA_hat"] = (lambda_DA_hat - self._lambda_DA_mean) / self._lambda_DA_std
         # Zero out near-zero values so they are dropped from the sparse LP matrix,
         # preventing extreme coefficient ranges from z-scored features near their mean.
-        X_features = X_features.where(X_features.abs() >= 1e-4, other=0.0)
+        X_features = X_features.where(X_features.abs() >= 1e-3, other=0.0)
         feature_dim = X_features.columns.tolist()
         self.constants.FEATURE_DIM = feature_dim
         self.parameters.X_features = xr.DataArray(
@@ -842,7 +842,7 @@ class ModelSinglePolicyWindOnly(ModelHindsightWindOnly):
         self._lambda_DA_mean = float(lambda_DA_hat.mean())
         self._lambda_DA_std = max(float(lambda_DA_hat.std()), 1e-8)
         X_features["lambda_DA_hat"] = (lambda_DA_hat - self._lambda_DA_mean) / self._lambda_DA_std
-        X_features = X_features.where(X_features.abs() >= 1e-4, other=0.0)
+        X_features = X_features.where(X_features.abs() >= 1e-3, other=0.0)
         feature_dim = X_features.columns.tolist()
         self.constants.FEATURE_DIM = feature_dim
         self.parameters.X_features = xr.DataArray(
@@ -1012,7 +1012,7 @@ class ModelClassPolicyWindOnly(ModelHindsightWindOnly):
         self._lambda_DA_mean = float(lambda_DA_hat.mean())
         self._lambda_DA_std = max(float(lambda_DA_hat.std()), 1e-8)
         X_features["lambda_DA_hat"] = (lambda_DA_hat - self._lambda_DA_mean) / self._lambda_DA_std
-        X_features = X_features.where(X_features.abs() >= 1e-4, other=0.0)
+        X_features = X_features.where(X_features.abs() >= 1e-3, other=0.0)
         feature_dim = X_features.columns.tolist()
         self.constants.FEATURE_DIM = feature_dim
         self.parameters.X_features = xr.DataArray(

@@ -10,15 +10,20 @@ logger = logging.getLogger(__name__)
 
 def evaluate_classifier(model, X: pd.DataFrame = None, y: pd.Series = None, fallback_class: int = 2) -> Tuple[Dict[str, float], pd.DataFrame]:
     """
-    Evaluate a multi-class model.
+    Evaluate a classifier on the binary (class 0 vs class 1) task.
+
+    Samples whose true label is the fallback/abstain class are excluded before
+    computing any metric, so all metrics describe the binary task.
 
     Args:
-        model: Trained model with predict_proba method.
+        model: Trained model with predict and predict_proba methods.
         X (pd.DataFrame): Feature data for validation/testing.
-        y (pd.Series): True labels (multi-class series).
+        y (pd.Series): True labels (may include the fallback class).
+        fallback_class (int): Label of the fallback/abstain class to exclude from metrics.
 
     Returns:
-        Dict[str, float]: Dictionary with accuracy, ROC-AUC (macro averaged), and F1 score (macro averaged).
+        Dict[str, float]: Dictionary with accuracy, ROC-AUC (binary, on P(class 1)),
+            and F1 score (macro averaged over classes 0 and 1).
     """
     # Check types of X and y
     if not isinstance(X, pd.DataFrame):
@@ -52,9 +57,9 @@ def evaluate_classifier(model, X: pd.DataFrame = None, y: pd.Series = None, fall
     except ValueError as e:
         auc = np.nan
         logger.warning(f"ROC-AUC could not be computed: {e}")
-    # F1 score (macro)
+    # F1 score (macro over the two real classes)
     try:
-        f1 = f1_score(y_filtered.values, preds_filtered)
+        f1 = f1_score(y_filtered.values, preds_filtered, average="macro", labels=[0, 1])
     except ValueError as e:
         f1 = np.nan
         logger.warning(f"F1 score could not be computed: {e}")
@@ -71,7 +76,7 @@ def evaluate_classifier(model, X: pd.DataFrame = None, y: pd.Series = None, fall
 
     return metrics, results_df
 
-def compute_accuracy_f1(y_true: pd.Series, y_pred: pd.Series, y_score: pd.Series | None = None) -> Dict[str, float]:
+def compute_accuracy_f1(y_true: pd.Series, y_pred: pd.Series, y_score: pd.Series | None = None, fallback_class: int = 2) -> Dict[str, float]:
     """
     Compute classification metrics: accuracy, F1 score (macro), and optionally ROC-AUC.
 
@@ -79,25 +84,36 @@ def compute_accuracy_f1(y_true: pd.Series, y_pred: pd.Series, y_score: pd.Series
         y_true (pd.Series): True labels.
         y_pred (pd.Series): Predicted labels.
         y_score (pd.Series, optional): Predicted probabilities for the positive class (for ROC-AUC).
+        fallback_class (int): Label of the fallback/abstain class. Samples whose true
+            label is this class are excluded from every metric, since they all describe
+            the binary (class 0 vs class 1) task.
 
     Returns:
         Dict[str, float]: Dictionary with accuracy, F1 score, and optionally ROC-AUC.
     """
     metrics = {}
+
+    # All metrics describe the binary (class 0 vs class 1) task, so drop
+    # fallback/abstain-class samples up front to keep them mutually consistent
+    # (and to keep ROC-AUC from ever seeing a multiclass target).
+    binary_mask = np.asarray(y_true) != fallback_class
+    y_true_bin = np.asarray(y_true)[binary_mask]
+    y_pred_bin = np.asarray(y_pred)[binary_mask]
+
     try:
-        metrics["accuracy"] = accuracy_score(y_true, y_pred)
+        metrics["accuracy"] = accuracy_score(y_true_bin, y_pred_bin)
     except ValueError:
         metrics["accuracy"] = np.nan
         logger.warning("Accuracy could not be computed due to a ValueError.")
 
     try:
-        metrics["f1_score"] = f1_score(y_true, y_pred, average="macro")
+        metrics["f1_score"] = f1_score(y_true_bin, y_pred_bin, average="macro", labels=[0, 1])
     except ValueError:
         metrics["f1_score"] = np.nan
         logger.warning("F1 score could not be computed due to a ValueError.")
 
     try:
-        per_class_recall = recall_score(y_true, y_pred, average=None, labels=[0, 1], zero_division=np.nan)
+        per_class_recall = recall_score(y_true_bin, y_pred_bin, average=None, labels=[0, 1], zero_division=np.nan)
         metrics["accuracy_class_0"] = per_class_recall[0]
         metrics["accuracy_class_1"] = per_class_recall[1]
     except ValueError:
@@ -106,8 +122,9 @@ def compute_accuracy_f1(y_true: pd.Series, y_pred: pd.Series, y_score: pd.Series
         logger.warning("Per-class accuracy could not be computed due to a ValueError.")
 
     if y_score is not None:
+        y_score_bin = np.asarray(y_score)[binary_mask]
         try:
-            metrics["roc_auc"] = roc_auc_score(y_true, y_score)
+            metrics["roc_auc"] = roc_auc_score(y_true_bin, y_score_bin)
         except ValueError as e:
             metrics["roc_auc"] = np.nan
             logger.warning(f"ROC-AUC could not be computed: {e}")

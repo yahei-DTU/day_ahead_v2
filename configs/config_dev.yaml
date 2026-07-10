@@ -1,5 +1,5 @@
 defaults:
-  - datasets: data2025
+  - datasets: data2025_DE_LU
   - models: lightgbm
   - experiments: wasserstein_exp1
   - _self_

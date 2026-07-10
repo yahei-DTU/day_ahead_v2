@@ -21,7 +21,7 @@ def apply_plot_settings():
     Apply default plot settings for visualizations.
     """
     plt.style.use('seaborn-v0_8-colorblind')
-    x_length = 10
+    x_length = 6.5
     golden_ratio = (1 + 5 ** 0.5) / 2
     plt.rcParams['figure.figsize'] = (x_length, x_length / golden_ratio)
     plt.rcParams['font.size'] = 10
@@ -29,6 +29,10 @@ def apply_plot_settings():
     plt.rcParams['axes.labelsize'] = 10
     plt.rcParams['xtick.labelsize'] = 10
     plt.rcParams['ytick.labelsize'] = 10
+    plt.rcParams.update({
+        'font.family': 'STIXGeneral',
+        'mathtext.fontset': 'stix',
+    })
 
 # Color palettes
 color_palette_1 = {

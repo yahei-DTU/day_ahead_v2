@@ -5,6 +5,7 @@ __pycache__/
 src/__pycache__/
 utils/__pycache__/
 src/.cache.sqlite
+src/day_ahead_v2/check_enfor.py
 *.pyc
 data/
 .flake8
