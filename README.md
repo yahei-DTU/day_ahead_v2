@@ -1,7 +1,3 @@
-# day_ahead_v2
-
-**Predict, then Contextually Optimize — risk-aware arbitrage bidding for stochastic power producers.**
-
 This repository contains the code for the paper:
 
 > **When and How Should a Power Trader Engage in Arbitrage? Predict, then Contextually Optimize**
