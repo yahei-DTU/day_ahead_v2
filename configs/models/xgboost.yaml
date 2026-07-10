@@ -2,8 +2,8 @@ _target_: day_ahead_v2.model.XGBoostClassifier
 model_name: "xgboost"
 
 model_parameters:
-  objective: multi:softprob
   random_state: ${seed}
+  auto_scale_pos_weight: true        # auto-weight classes by inverse frequency
 
 model_hyperparameters:
   learning_rate: [0.01, 0.03]        # slower learning → smoother, less overfit

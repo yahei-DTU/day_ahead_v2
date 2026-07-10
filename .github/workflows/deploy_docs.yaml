@@ -1,0 +1,36 @@
+name: Deploy docs
+
+on:
+  push:
+      branches:
+          - main
+
+permissions:
+    contents: write
+
+jobs:
+  deploy:
+    name: Deploy docs
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: 3.12
+        cache: 'pip'
+        cache-dependency-path: setup.py
+
+    - name: Install uv
+      run: pip install uv
+
+    - name: Sync environment
+      run: uv sync --all-extras --dev
+
+    - name: Deploy docs
+      run: uv run mkdocs gh-deploy --force -f docs/mkdocs.yaml

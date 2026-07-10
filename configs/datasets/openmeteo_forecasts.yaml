@@ -1,0 +1,25 @@
+dataset_name: "openmeteo_forecasts"
+
+validation:
+  enabled: true
+  thresholds:
+    missing_warn_pct: 1.0
+    missing_fail_pct: 5.0
+    duplicate_warn_pct: 1.0
+    duplicate_fail_pct: 5.0
+
+start_date: 2025-01-01
+end_date: 2026-03-02
+savepath: data/raw/openmeteo/
+api_url: https://historical-forecast-api.open-meteo.com/v1/forecast
+
+parameters:
+  latitude: [54.24, 54.38, 52.48, 51.12, 48.38]
+  longitude: [7.72, 11.62, 8.53, 13.14, 12.30]
+  start_date: ${datasets.start_date}
+  end_date: ${datasets.end_date}
+  hourly:
+    - temperature_2m
+    - cloud_cover
+    - wind_speed_10m
+    - wind_direction_10m

@@ -1,0 +1,42 @@
+dataset_name: "entsoe"
+
+validation:
+  enabled: true
+  thresholds:
+    missing_warn_pct: 1.0
+    missing_fail_pct: 5.0
+    duplicate_warn_pct: 1.0
+    duplicate_fail_pct: 5.0
+
+start_date: "2023-01-01T00:00:00Z"
+end_date: "2026-06-01T00:00:00Z"
+savepath: "data/raw/entsoe_DE_LU/"
+BZN: DE_LU
+include_neighbours: true # whether to pull data from the neighbouring countries as well (except crossborder data)
+
+queries:
+  generation:
+  contracted_reserve_prices_procured_capacity:
+    process_type: A47 # A51: aFRR, A47: mFRR, A52: FCR
+    type_marketagreement_type: A01  # A01: Day-ahead,
+  # imbalance_volumes:
+  # net_position:
+  # imbalance_prices:
+  # wind_and_solar_forecast:
+  # load_and_forecast:
+  # generation_forecast:
+  # day_ahead_prices:
+  # crossborder_flows:
+  #   country_code_from: all # all means all neighbours, or you can specify a list of specific countries, e.g. ["DE", "SE"]
+  #   country_code_to: all
+  # scheduled_exchanges:
+  #   country_code_from: all # all means all neighbours, or you can specify a list of specific countries, e.g. ["DE", "SE"]
+  #   country_code_to: all
+  #   dayahead: true
+  # net_transfer_capacity_dayahead:
+  #   country_code_from: all # all means all neighbours, or you can specify a list of specific countries, e.g. ["DE", "SE"]
+  #   country_code_to: all
+  # offered_capacity:
+  #   country_code_from: all # all means all neighbours, or you can specify a list of specific countries, e.g. ["DE", "SE"]
+  #   country_code_to: all
+  #   contract_marketagreement_type: A01 # A01: Daily, A02: Weekly, A13: Hourly

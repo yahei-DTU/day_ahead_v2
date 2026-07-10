@@ -1,0 +1,30 @@
+dataset_name: "netztransparenz"
+
+validation:
+  enabled: true
+  thresholds:
+    missing_warn_pct: 1.0
+    missing_fail_pct: 5.0
+    duplicate_warn_pct: 1.0
+    duplicate_fail_pct: 5.0
+
+start_date: "2023-01-01T00:00:00"
+end_date: "2026-03-02T00:00:00"
+savepath: "data/raw/netztransparenz/"
+
+# Each entry becomes a NetztransparentHandler call and is saved as <name>.csv.
+# `endpoint` is the path after /api/v1/data/ (browse the Swagger UI for options).
+# Credentials are read from the IPNT_CLIENT_ID / IPNT_CLIENT_SECRET env vars.
+requests:
+  prognose_solar:
+    endpoint: "prognose/solar"
+    start: ${datasets.start_date}
+    end: ${datasets.end_date}
+  prognose_wind:
+    endpoint: "prognose/wind"
+    start: ${datasets.start_date}
+    end: ${datasets.end_date}
+  # hochrechnung_solar:
+  #   endpoint: "hochrechnung/solar"
+  #   start: ${datasets.start_date}
+  #   end: ${datasets.end_date}

@@ -1,9 +1,10 @@
 defaults:
-  - datasets: imbalance_data
-  - models: xgboost
-  - experiments: large
+  - datasets: data2025_DE_LU
+  - models: lightgbm
+  - experiments: wasserstein_exp1
   - _self_
 
+project_root: "${hydra:runtime.cwd}"
 seed: 42
 
 hydra:

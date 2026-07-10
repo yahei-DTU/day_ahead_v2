@@ -1,0 +1,32 @@
+# Experiment configuration for Exp1
+experiment_name: "benchmark_exp1_windonly" # Name of the experiment
+
+# Train parameters
+train_parameters:
+  train_length: 120 # Days of training
+  valid_length: 30 # Days of validation
+  test_length: 7 # Days of testing
+  feature_selection: true # Whether to perform feature selection
+
+# Model parameters
+experiment_parameters:
+  start_date: "2025-04-01" # Start date for training
+  end_date: "2026-01-31" # End date for testing 2026-01-31
+
+# Optimization parameters
+optimization_parameters:
+  portfolio: "wind_only" # Portfolio configuration (e.g., "wind_only", "hpp")
+  electrolyzer_capacity: 0 # MW, set to 0 to disable electrolyzer
+  wind_capacity: 7.2 # MW
+  hydrogen_price: 2.0 # EUR/kg
+  electrolyzer_load_min: 0.1 # Minimum load factor for the electrolyzer (10% of capacity)
+  number_of_segments: 2 # Number of linear segments for the hydrogen production function
+  a: [] # Linear segments of hydrogen production function (kg/MWh)
+  b: []
+  minimum_daily_hydrogen: 100 # Minimum daily hydrogen production requirement (kg)
+  cvar_alpha: 0.95 # Confidence level for CVaR
+  cvar_beta: 0.9 # Weight on expected profit and CVaR in the objective function (1.0 = only maximize expected profit, 0.0 = only maximize CVaR)
+
+feature_selection_parameters:
+  shap_cumulative_importance_threshold: 0.6 # Threshold for cumulative importance in SHAP feature selection
+  plot_shap_importance: true # Whether to plot SHAP feature importance
