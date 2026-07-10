@@ -56,7 +56,6 @@ day_ahead_v2/
 ├── paper/                         # LaTeX source of the accompanying paper
 ├── docs/                          # mkdocs documentation
 ├── tests/                         # pytest test suite
-├── dockerfiles/                   # Docker build files
 ├── pyproject.toml                 # Project metadata & dependencies (uv)
 ├── uv.lock
 └── tasks.py                       # invoke task shortcuts
