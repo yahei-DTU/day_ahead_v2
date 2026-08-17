@@ -1,4 +1,4 @@
-[![DOI](https://zenodo.org/badge/1059429283.svg)](https://doi.org/10.5281/zenodo.21979000)
+[![DOI](https://zenodo.org/badge/1059429283.svg?v=1)](https://doi.org/10.5281/zenodo.21979000)
 
 This repository contains the code for the paper:
 
