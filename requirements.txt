@@ -34,7 +34,7 @@ mkdocstrings-python==2.0.2
 mypy==1.19.1
 mypy-extensions==1.1.0
 nodeenv==1.10.0
-numpy==2.4.1
+numpy==2.5.1
 packaging==25.0
 paginate==0.5.7
 pandas==2.3.3
